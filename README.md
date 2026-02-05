@@ -146,12 +146,52 @@ Two-step policy:
    raw `power_readings` in batches until the DB size is under the threshold.
 
 Defaults:
-- `RETENTION_DOWNSAMPLE_AFTER_HOURS=24`
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS=168`
 - `RETENTION_RUN_SECONDS=3600`
 - `RETENTION_PRUNE_BATCH=20000`
 - `RETENTION_MAX_PRUNE_ITERATIONS=20`
 
 Set `RETENTION_MAX_DB_MB` if you want size-based pruning.
+
+### Monitor DB Size
+Quick checks in psql:
+
+```sql
+-- Total database size
+SELECT pg_size_pretty(pg_database_size(current_database()));
+
+-- Table sizes (raw + downsampled)
+SELECT
+  relname,
+  pg_size_pretty(pg_total_relation_size(relid)) AS total_size
+FROM pg_catalog.pg_statio_user_tables
+WHERE relname IN ('power_readings', 'power_readings_1m')
+ORDER BY pg_total_relation_size(relid) DESC;
+```
+
+## Env Vars
+- `SHELLY_HOST`: IP or hostname of the Shelly device.
+- `SHELLY_TIMEOUT_MS`: RPC timeout in milliseconds.
+- `POLL_LIVE_SECONDS`: poll interval for live power readings.
+- `POLL_INTERVAL_DATA_SECONDS`: poll interval for EMData interval ingestion.
+- `EM_DATA_ID`: EMData component id (`emdata:0` → `0`).
+- `EMDATA_LOOKBACK_RECORDS`: how many recent intervals to backfill on startup.
+- `DATABASE_URL`: PostgreSQL connection string (use TLS options if required by provider).
+- `ALERT_POWER_W`: threshold for high power alert.
+- `ALERT_SUSTAIN_SECONDS`: seconds power must stay above threshold to trigger.
+- `ALERT_COOLDOWN_SECONDS`: cooldown between alerts.
+- `ALERT_TRIGGER_SECONDS`: how long to keep the HomeKit sensor ON before OFF.
+- `TRIGGER_HTTP_URL`: base URL with `{state}` token, or base URL with `/on` and `/off`.
+- `TRIGGER_HTTP_ON_URL`: explicit URL to turn sensor ON.
+- `TRIGGER_HTTP_OFF_URL`: explicit URL to turn sensor OFF.
+- `TRIGGER_HTTP_METHOD`: `GET` or `POST` for the trigger calls.
+- `TEST_TRIGGER_TOKEN`: optional token required for `/trigger/test`.
+- `HEALTHZ_PORT`: port for `/healthz` and `/trigger/test`.
+- `RETENTION_RUN_SECONDS`: how often to run retention.
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS`: keep raw `power_readings` for this many hours, then downsample.
+- `RETENTION_MAX_DB_MB`: optional DB size cap; if set, old raw rows are deleted to fit.
+- `RETENTION_PRUNE_BATCH`: rows deleted per prune batch when size cap is exceeded.
+- `RETENTION_MAX_PRUNE_ITERATIONS`: max prune batches per retention run.
 
 ## Systemd (Docker Autostart)
 With `restart: unless-stopped` in Compose, containers will restart when the Docker daemon
