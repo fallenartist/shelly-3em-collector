@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from psycopg_pool import AsyncConnectionPool
+from psycopg.types.json import Jsonb
 
 
 @dataclass
@@ -16,6 +17,12 @@ class AlertState:
 
 def create_pool(database_url: str) -> AsyncConnectionPool:
     return AsyncConnectionPool(conninfo=database_url, open=False)
+
+
+def _to_jsonb(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return Jsonb(value)
+    return value
 
 
 async def insert_power_reading(
@@ -90,7 +97,7 @@ async def upsert_energy_interval(
         "end_ts": end_ts,
         "energy_wh": energy_wh,
         "avg_power_w": avg_power_w,
-        "meta": meta,
+        "meta": _to_jsonb(meta),
     }
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
@@ -108,7 +115,7 @@ async def insert_alert_event(
         INSERT INTO alert_events (ts, type, value, details)
         VALUES (%(ts)s, %(type)s, %(value)s, %(details)s)
     """
-    params = {"ts": ts, "type": alert_type, "value": value, "details": details}
+    params = {"ts": ts, "type": alert_type, "value": value, "details": _to_jsonb(details)}
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(query, params)

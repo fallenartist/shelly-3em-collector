@@ -37,6 +37,16 @@ Run:
 docker compose up --build
 ```
 
+If you need a clean rebuild (no cache), run build and up separately:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+Note: systems with the Compose v2 plugin use `docker compose` (space). If you only have the
+legacy v1 binary, use `docker-compose` (hyphen) instead.
+
 Then apply schema (from your host machine):
 
 ```bash
