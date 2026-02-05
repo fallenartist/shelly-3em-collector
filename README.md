@@ -70,6 +70,20 @@ For a notification-friendly sensor, set the accessory `Type` to `motion` (or `co
 and optionally set `Auto Release Time` (e.g., 15s). The collector still sends an explicit
 OFF after `ALERT_TRIGGER_SECONDS`, so auto-release is just a safety net.
 
+### Test Trigger Endpoint
+The collector exposes a small test endpoint that will pulse the webhook without waiting for
+an alert condition:
+
+```text
+GET /trigger/test
+```
+
+If you set `TEST_TRIGGER_TOKEN`, you must pass `?token=...`:
+
+```text
+GET /trigger/test?token=YOUR_TOKEN
+```
+
 ## Deployment On Homebridge Image (RPi)
 The Homebridge image is a host OS. The collector is a **headless service**, so you don’t
 “access” it via the Homebridge UI. You typically:
@@ -123,3 +137,51 @@ manual `.deb` installs, see the official Docker docs for Raspberry Pi OS 32-bit.
   - `1` = phase B
   - `2` = phase C
   - `3` = total (sum of phases)
+
+## Retention Policy
+Two-step policy:
+1. **Downsample** raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into
+   `power_readings_1m`.
+2. **Optional size cap**: if `RETENTION_MAX_DB_MB` is set, the collector will delete oldest
+   raw `power_readings` in batches until the DB size is under the threshold.
+
+Defaults:
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS=24`
+- `RETENTION_RUN_SECONDS=3600`
+- `RETENTION_PRUNE_BATCH=20000`
+- `RETENTION_MAX_PRUNE_ITERATIONS=20`
+
+Set `RETENTION_MAX_DB_MB` if you want size-based pruning.
+
+## Systemd (Docker Autostart)
+With `restart: unless-stopped` in Compose, containers will restart when the Docker daemon
+starts. To ensure `docker compose up -d` runs on boot (first start), you can install this
+unit file:
+
+`deploy/shelly-3em-collector.service`
+
+```ini
+[Unit]
+Description=Shelly 3EM Collector (Docker Compose)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/pi/shelly-3em-collector
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Install:
+
+```bash
+sudo cp deploy/shelly-3em-collector.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable shelly-3em-collector
+sudo systemctl start shelly-3em-collector
+```

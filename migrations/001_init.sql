@@ -17,6 +17,25 @@ CREATE TABLE IF NOT EXISTS power_readings (
 CREATE INDEX IF NOT EXISTS power_readings_ts_idx ON power_readings (ts);
 CREATE INDEX IF NOT EXISTS power_readings_device_ts_idx ON power_readings (device_id, ts);
 
+CREATE TABLE IF NOT EXISTS power_readings_1m (
+    ts_minute timestamptz NOT NULL,
+    device_id text NOT NULL,
+    avg_total_power_w numeric,
+    avg_phase_a_power_w numeric,
+    avg_phase_b_power_w numeric,
+    avg_phase_c_power_w numeric,
+    avg_phase_a_voltage_v numeric,
+    avg_phase_b_voltage_v numeric,
+    avg_phase_c_voltage_v numeric,
+    avg_phase_a_current_a numeric,
+    avg_phase_b_current_a numeric,
+    avg_phase_c_current_a numeric,
+    samples int NOT NULL,
+    PRIMARY KEY (device_id, ts_minute)
+);
+
+CREATE INDEX IF NOT EXISTS power_readings_1m_ts_idx ON power_readings_1m (ts_minute);
+
 CREATE TABLE IF NOT EXISTS energy_intervals (
     id BIGSERIAL PRIMARY KEY,
     device_id text,

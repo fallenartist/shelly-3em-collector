@@ -25,6 +25,100 @@ def _to_jsonb(value: Any) -> Any:
     return value
 
 
+async def downsample_power_readings(pool: AsyncConnectionPool, older_than_hours: int) -> int:
+    query = """
+        INSERT INTO power_readings_1m (
+            ts_minute,
+            device_id,
+            avg_total_power_w,
+            avg_phase_a_power_w,
+            avg_phase_b_power_w,
+            avg_phase_c_power_w,
+            avg_phase_a_voltage_v,
+            avg_phase_b_voltage_v,
+            avg_phase_c_voltage_v,
+            avg_phase_a_current_a,
+            avg_phase_b_current_a,
+            avg_phase_c_current_a,
+            samples
+        )
+        SELECT
+            date_trunc('minute', ts) AS ts_minute,
+            COALESCE(device_id, 'unknown') AS device_id,
+            avg(total_power_w),
+            avg(phase_a_power_w),
+            avg(phase_b_power_w),
+            avg(phase_c_power_w),
+            avg(phase_a_voltage_v),
+            avg(phase_b_voltage_v),
+            avg(phase_c_voltage_v),
+            avg(phase_a_current_a),
+            avg(phase_b_current_a),
+            avg(phase_c_current_a),
+            count(*)
+        FROM power_readings
+        WHERE ts < (now() AT TIME ZONE 'utc') - (%(hours)s || ' hours')::interval
+        GROUP BY 1, 2
+        ON CONFLICT (device_id, ts_minute) DO NOTHING
+    """
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, {"hours": older_than_hours})
+            return cur.rowcount or 0
+
+
+async def delete_power_readings_older_than(pool: AsyncConnectionPool, older_than_hours: int) -> int:
+    query = """
+        DELETE FROM power_readings
+        WHERE ts < (now() AT TIME ZONE 'utc') - (%(hours)s || ' hours')::interval
+    """
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, {"hours": older_than_hours})
+            return cur.rowcount or 0
+
+
+async def get_database_size_bytes(pool: AsyncConnectionPool) -> int | None:
+    query = "SELECT pg_database_size(current_database())"
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query)
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            return int(row[0])
+
+
+async def prune_power_readings_by_size(
+    pool: AsyncConnectionPool,
+    max_bytes: int,
+    batch_size: int,
+    max_iterations: int,
+) -> int:
+    total_deleted = 0
+    for _ in range(max_iterations):
+        size = await get_database_size_bytes(pool)
+        if size is None or size <= max_bytes:
+            break
+        query = """
+            DELETE FROM power_readings
+            WHERE id IN (
+                SELECT id
+                FROM power_readings
+                ORDER BY ts ASC
+                LIMIT %(limit)s
+            )
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(query, {"limit": batch_size})
+                deleted = cur.rowcount or 0
+                total_deleted += deleted
+        if deleted == 0:
+            break
+    return total_deleted
+
+
 async def insert_power_reading(
     pool: AsyncConnectionPool,
     ts: datetime,

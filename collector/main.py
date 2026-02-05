@@ -9,7 +9,15 @@ from aiohttp import web
 
 from .alert import AlertConfig, AlertEngine
 from .config import Settings
-from .db import create_pool, insert_alert_event, insert_power_reading, upsert_energy_interval
+from .db import (
+    create_pool,
+    delete_power_readings_older_than,
+    downsample_power_readings,
+    insert_alert_event,
+    insert_power_reading,
+    prune_power_readings_by_size,
+    upsert_energy_interval,
+)
 from .health import HealthState
 from .ingest import extract_power_reading
 from .intervals import parse_emdata_data
@@ -155,13 +163,63 @@ async def interval_poll_loop(
         await asyncio.sleep(poll_seconds)
 
 
-async def health_app(health: HealthState) -> web.Application:
+async def retention_loop(
+    pool,
+    run_seconds: int,
+    downsample_after_hours: int | None,
+    max_db_mb: int | None,
+    prune_batch: int,
+    max_prune_iterations: int,
+    health: HealthState,
+    stop: asyncio.Event,
+) -> None:
+    while not stop.is_set():
+        try:
+            if downsample_after_hours and downsample_after_hours > 0:
+                inserted = await downsample_power_readings(pool, downsample_after_hours)
+                deleted = await delete_power_readings_older_than(pool, downsample_after_hours)
+                log(
+                    "retention.downsample",
+                    inserted=inserted,
+                    deleted=deleted,
+                    older_than_hours=downsample_after_hours,
+                )
+
+            if max_db_mb and max_db_mb > 0:
+                max_bytes = int(max_db_mb * 1024 * 1024)
+                deleted = await prune_power_readings_by_size(
+                    pool,
+                    max_bytes=max_bytes,
+                    batch_size=prune_batch,
+                    max_iterations=max_prune_iterations,
+                )
+                if deleted:
+                    log("retention.prune", deleted=deleted, max_db_mb=max_db_mb)
+
+            health.last_retention_run = _utcnow()
+        except Exception as exc:  # noqa: BLE001
+            health.last_error = str(exc)
+            log("retention.error", error=str(exc))
+        await asyncio.sleep(run_seconds)
+
+
+async def health_app(health: HealthState, trigger: HttpTrigger, settings: Settings) -> web.Application:
     app = web.Application()
 
     async def handle(request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", **health.as_dict()})
 
+    async def trigger_test(request: web.Request) -> web.Response:
+        token = settings.TEST_TRIGGER_TOKEN
+        if token:
+            provided = request.query.get("token")
+            if provided != token:
+                return web.json_response({"status": "forbidden"}, status=403)
+        asyncio.create_task(trigger.pulse())
+        return web.json_response({"status": "triggered"})
+
     app.router.add_get("/healthz", handle)
+    app.router.add_get("/trigger/test", trigger_test)
     return app
 
 
@@ -201,7 +259,7 @@ async def run() -> None:
         except (AttributeError, NotImplementedError):
             pass
 
-    app = await health_app(health)
+    app = await health_app(health, trigger, settings)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", settings.HEALTHZ_PORT)
@@ -230,6 +288,18 @@ async def run() -> None:
                 settings.EM_DATA_ID,
                 settings.EMDATA_LOOKBACK_RECORDS,
                 settings.POLL_INTERVAL_DATA_SECONDS,
+                health,
+                stop,
+            )
+        ),
+        asyncio.create_task(
+            retention_loop(
+                pool,
+                settings.RETENTION_RUN_SECONDS,
+                settings.RETENTION_DOWNSAMPLE_AFTER_HOURS,
+                settings.RETENTION_MAX_DB_MB,
+                settings.RETENTION_PRUNE_BATCH,
+                settings.RETENTION_MAX_PRUNE_ITERATIONS,
                 health,
                 stop,
             )

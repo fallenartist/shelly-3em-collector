@@ -33,6 +33,14 @@ class Settings(BaseSettings):
 
     # Service
     HEALTHZ_PORT: int = 8080
+    TEST_TRIGGER_TOKEN: str | None = None
+
+    # Retention
+    RETENTION_RUN_SECONDS: int = 3600
+    RETENTION_DOWNSAMPLE_AFTER_HOURS: int | None = 24
+    RETENTION_MAX_DB_MB: int | None = None
+    RETENTION_PRUNE_BATCH: int = 20000
+    RETENTION_MAX_PRUNE_ITERATIONS: int = 20
 
     @property
     def shelly_base_url(self) -> str:
