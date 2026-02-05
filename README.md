@@ -1,23 +1,40 @@
 # Shelly 3EM Collector
 
-Collector service for Shelly 3EM-63T Gen3 RPC → PostgreSQL + HomeKit trigger.
+**What it is**
+A small, headless collector that reads power/energy data from a Shelly 3EM‑63T Gen3 over RPC, stores it in PostgreSQL, and triggers HomeKit notifications by toggling a Homebridge virtual sensor.
 
-## What’s Here
-- `collector/` Python service (RPC polling, DB writes, alert + trigger)
-- `migrations/` SQL schema
-- `docker-compose.yml` for local/dev
+**What it does**
+- Polls `Shelly.GetStatus` for live power/voltage/current.
+- Ingests interval energy data from `EMData.GetRecords` + `EMData.GetData`.
+- Stores data in Postgres for analytics and cost calculations.
+- Triggers HomeKit notifications via `homebridge-http-webhooks`.
 
-## Quickstart (Local Dev)
-1. Copy `.env.example` to `.env` and fill in `SHELLY_HOST` and `DATABASE_URL`.
-2. Create DB schema:
+**What’s included**
+- `collector/`: Python service (RPC polling, DB writes, alerts, webhook trigger)
+- `migrations/`: SQL schema
+- `docker-compose.yml`: run the collector with an external DB
+- `deploy/`: systemd unit for autostart
 
-```sql
--- run against your DB
-\i migrations/001_init.sql
+**Install and Run (Pi, Docker)**
+1. Clone the repo on the Pi.
+2. Copy `.env.example` to `.env` and fill it in.
+3. Build and start:
+
+```bash
+docker compose up -d --build
 ```
 
-3. Run locally:
+4. Apply schema:
 
+```bash
+psql "$DATABASE_URL" -f migrations/001_init.sql
+```
+
+Notes:
+- If your `.env` values contain `&`, wrap them in quotes.
+- If you need a clean rebuild: `docker compose build --no-cache` then `docker compose up -d`.
+
+**Local Dev (Optional)**
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -25,151 +42,71 @@ python3 -m pip install -r requirements.txt
 python3 -m collector
 ```
 
-Health endpoint: `http://localhost:8080/healthz`
+**Configuration (Env Vars)**
+- `SHELLY_HOST`: Shelly IP or hostname.
+- `SHELLY_TIMEOUT_MS`: RPC timeout in ms.
+- `POLL_LIVE_SECONDS`: live poll interval.
+- `POLL_INTERVAL_DATA_SECONDS`: EMData poll interval.
+- `EM_DATA_ID`: EMData component id (`emdata:0` → `0`).
+- `EMDATA_LOOKBACK_RECORDS`: backfill interval count on startup.
+- `DATABASE_URL`: Postgres connection string.
+- `ALERT_POWER_W`: power threshold to trigger.
+- `ALERT_SUSTAIN_SECONDS`: seconds above threshold before trigger.
+- `ALERT_COOLDOWN_SECONDS`: cooldown between alerts.
+- `ALERT_TRIGGER_SECONDS`: how long to keep sensor ON.
+- `TRIGGER_HTTP_URL`: base URL with `{state}` or `/on`/`/off`.
+- `TRIGGER_HTTP_ON_URL`: explicit ON URL.
+- `TRIGGER_HTTP_OFF_URL`: explicit OFF URL.
+- `TRIGGER_HTTP_METHOD`: `GET` or `POST`.
+- `TEST_TRIGGER_TOKEN`: optional token for `/trigger/test`.
+- `HEALTHZ_PORT`: health and test endpoints.
+- `RETENTION_RUN_SECONDS`: retention cadence.
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS`: keep raw data for N hours.
+- `RETENTION_MAX_DB_MB`: optional DB size cap for pruning.
+- `RETENTION_PRUNE_BATCH`: rows per prune batch.
+- `RETENTION_MAX_PRUNE_ITERATIONS`: max batches per run.
 
-## Quickstart (Docker Compose)
-With an external database (Neon/MyDevil/Synology), set `DATABASE_URL` in `.env` to that
-connection string and include `sslmode=require` if your provider mandates TLS.
+**HomeKit Notifications (homebridge-http-webhooks)**
+Set a sensor accessory in Homebridge with:
+- `Type`: `motion` or `contact`
+- `Auto Release Time`: optional, e.g. 15s
 
-Run:
-
-```bash
-docker compose up --build
-```
-
-If you need a clean rebuild (no cache), run build and up separately:
-
-```bash
-docker compose build --no-cache
-docker compose up -d
-```
-
-Note: systems with the Compose v2 plugin use `docker compose` (space). If you only have the
-legacy v1 binary, use `docker-compose` (hyphen) instead.
-
-Then apply schema (from your host machine):
-
-```bash
-psql "$DATABASE_URL" -f migrations/001_init.sql
-```
-
-## Homebridge Trigger (homebridge-http-webhooks)
-You already have `homebridge-http-webhooks`. It expects a webhook URL that includes
-`accessoryId` and a `state` value of `true` or `false` for boolean accessories.
-
-Example (replace host, port, and accessoryId with your config):
+Example URLs:
 
 ```env
-TRIGGER_HTTP_ON_URL=http://homebridge.local:51828/?accessoryId=power_alert&state=true
-TRIGGER_HTTP_OFF_URL=http://homebridge.local:51828/?accessoryId=power_alert&state=false
+TRIGGER_HTTP_ON_URL="http://<pi-ip>:51828/?accessoryId=powermeterLimit&state=true"
+TRIGGER_HTTP_OFF_URL="http://<pi-ip>:51828/?accessoryId=powermeterLimit&state=false"
 TRIGGER_HTTP_METHOD=GET
 ```
 
-The `webhook_port` and `accessoryId` come from your `homebridge-http-webhooks` config.
-For a notification-friendly sensor, set the accessory `Type` to `motion` (or `contact`)
-and optionally set `Auto Release Time` (e.g., 15s). The collector still sends an explicit
-OFF after `ALERT_TRIGGER_SECONDS`, so auto-release is just a safety net.
+**Health and Test Endpoints**
+- `GET /healthz` returns status and last poll timestamps.
+- `GET /trigger/test` pulses the HomeKit sensor once.
+- If `TEST_TRIGGER_TOKEN` is set, call `/trigger/test?token=...`.
 
-### Test Trigger Endpoint
-The collector exposes a small test endpoint that will pulse the webhook without waiting for
-an alert condition:
+**Data Model (Core Tables)**
+- `power_readings`: live snapshots (high‑frequency).
+- `energy_intervals`: interval energy data from EMData.
+- `power_readings_1m`: downsampled 1‑minute aggregates.
+- `alert_events`, `alert_state`: alert history and state.
 
-```text
-GET /trigger/test
-```
+**Retention Policy**
+Two‑step policy:
+1. Downsample raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into `power_readings_1m`.
+2. Optional size cap: if `RETENTION_MAX_DB_MB` is set, delete oldest raw rows in batches.
 
-If you set `TEST_TRIGGER_TOKEN`, you must pass `?token=...`:
+Default raw retention is 7 days (`RETENTION_DOWNSAMPLE_AFTER_HOURS=168`).
 
-```text
-GET /trigger/test?token=YOUR_TOKEN
-```
-
-## Deployment On Homebridge Image (RPi)
-The Homebridge image is a host OS. The collector is a **headless service**, so you don’t
-“access” it via the Homebridge UI. You typically:
-
-- SSH into the Pi and run it as a systemd service, or
-- Install Docker on the Pi and run `docker compose` there
-
-Either way, you’ll access the collector over the network via:
-
-- `http://<pi-ip>:8080/healthz` for health
-- Logs via `journalctl` (systemd) or `docker compose logs`
-
-If you want, I can add a systemd unit file and install script for the Pi.
-
-## Docker Install Guide (Homebridge Image)
-Your Homebridge image is Raspberry Pi OS 32-bit (armhf). Docker Engine still supports this
-platform, but Docker v28 is the last major release that will ship new 32-bit RPi OS packages.
-Plan to migrate to 64-bit if you want long-term upgrades.
-
-Use the official Docker Engine install steps for Raspberry Pi OS 32-bit. The summary below
-follows the "apt repository" method:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/raspbian/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/raspbian \
-  $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" | \
-  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-```
-
-Post-install (optional):
-
-```bash
-sudo usermod -aG docker $USER
-```
-
-Log out and back in for group membership to apply. If you prefer the convenience script or
-manual `.deb` installs, see the official Docker docs for Raspberry Pi OS 32-bit.
-
-## EMData Notes
-- `EM_DATA_ID` should match the EMData component id (`emdata:0` → `EM_DATA_ID=0`).
-- `EMDATA_LOOKBACK_RECORDS` controls how many recent interval records to fetch on startup.
-- Channel mapping in `energy_intervals`:
-  - `0` = phase A
-  - `1` = phase B
-  - `2` = phase C
-  - `3` = total (sum of phases)
-
-## Retention Policy
-Two-step policy:
-1. **Downsample** raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into
-   `power_readings_1m`.
-2. **Optional size cap**: if `RETENTION_MAX_DB_MB` is set, the collector will delete oldest
-   raw `power_readings` in batches until the DB size is under the threshold.
-
-Defaults:
-- `RETENTION_DOWNSAMPLE_AFTER_HOURS=168`
-- `RETENTION_RUN_SECONDS=3600`
-- `RETENTION_PRUNE_BATCH=20000`
-- `RETENTION_MAX_PRUNE_ITERATIONS=20`
-
-Set `RETENTION_MAX_DB_MB` if you want size-based pruning.
-
-### Monitor DB Size
-Quick checks in psql:
-
+**Monitor DB Size**
 ```sql
--- Total database size
-SELECT pg_size_pretty(pg_database_size(current_database()));
-
--- Table sizes (raw + downsampled)
-SELECT
-  relname,
-  pg_size_pretty(pg_total_relation_size(relid)) AS total_size
+SELECT pg_size_pretty(pg_database_size(current_database())) AS db_size;
+SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS total_size
 FROM pg_catalog.pg_statio_user_tables
 WHERE relname IN ('power_readings', 'power_readings_1m')
 ORDER BY pg_total_relation_size(relid) DESC;
 ```
 
-Or use the helper script:
+Or:
 
 ```bash
 set -a
@@ -178,55 +115,17 @@ set +a
 ./scripts/db_size.sh
 ```
 
-## Env Vars
-- `SHELLY_HOST`: IP or hostname of the Shelly device.
-- `SHELLY_TIMEOUT_MS`: RPC timeout in milliseconds.
-- `POLL_LIVE_SECONDS`: poll interval for live power readings.
-- `POLL_INTERVAL_DATA_SECONDS`: poll interval for EMData interval ingestion.
-- `EM_DATA_ID`: EMData component id (`emdata:0` → `0`).
-- `EMDATA_LOOKBACK_RECORDS`: how many recent intervals to backfill on startup.
-- `DATABASE_URL`: PostgreSQL connection string (use TLS options if required by provider).
-- `ALERT_POWER_W`: threshold for high power alert.
-- `ALERT_SUSTAIN_SECONDS`: seconds power must stay above threshold to trigger.
-- `ALERT_COOLDOWN_SECONDS`: cooldown between alerts.
-- `ALERT_TRIGGER_SECONDS`: how long to keep the HomeKit sensor ON before OFF.
-- `TRIGGER_HTTP_URL`: base URL with `{state}` token, or base URL with `/on` and `/off`.
-- `TRIGGER_HTTP_ON_URL`: explicit URL to turn sensor ON.
-- `TRIGGER_HTTP_OFF_URL`: explicit URL to turn sensor OFF.
-- `TRIGGER_HTTP_METHOD`: `GET` or `POST` for the trigger calls.
-- `TEST_TRIGGER_TOKEN`: optional token required for `/trigger/test`.
-- `HEALTHZ_PORT`: port for `/healthz` and `/trigger/test`.
-- `RETENTION_RUN_SECONDS`: how often to run retention.
-- `RETENTION_DOWNSAMPLE_AFTER_HOURS`: keep raw `power_readings` for this many hours, then downsample.
-- `RETENTION_MAX_DB_MB`: optional DB size cap; if set, old raw rows are deleted to fit.
-- `RETENTION_PRUNE_BATCH`: rows deleted per prune batch when size cap is exceeded.
-- `RETENTION_MAX_PRUNE_ITERATIONS`: max prune batches per retention run.
+**Using the Collected Data (Next App Goals)**
+Ideas for your analytics web app:
+- Daily/weekly/monthly kWh from `energy_intervals`.
+- Cost models by tariff windows (peak/off‑peak) using `energy_intervals`.
+- Instant power trends from `power_readings` and long‑term trends from `power_readings_1m`.
+- Alerts/correlations for high‑power events with appliance signatures.
 
-## Systemd (Docker Autostart)
-With `restart: unless-stopped` in Compose, containers will restart when the Docker daemon
-starts. To ensure `docker compose up -d` runs on boot (first start), you can install this
-unit file:
+If you share your tariff rules, I can add a `tariffs` table and helper queries.
 
-`deploy/shelly-3em-collector.service`
-
-```ini
-[Unit]
-Description=Shelly 3EM Collector (Docker Compose)
-Requires=docker.service
-After=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=/home/pi/shelly-3em-collector
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Install:
+**Systemd Autostart (Docker Compose)**
+`deploy/shelly-3em-collector.service` runs `docker compose up -d` on boot.
 
 ```bash
 sudo cp deploy/shelly-3em-collector.service /etc/systemd/system/

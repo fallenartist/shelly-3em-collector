@@ -9,3 +9,8 @@
 - Dockerfile and Docker Compose configuration for external databases.
 - Health endpoint (`/healthz`) and structured JSON logging.
 - README setup instructions for Pi, Docker, and Homebridge webhooks.
+
+## 0.1.1 - 2026-02-05
+### Changed
+- Restructured README for clearer install/setup and data usage guidance.
+- Updated retention defaults to keep 7 days of raw readings before downsampling.
