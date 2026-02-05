@@ -169,6 +169,15 @@ WHERE relname IN ('power_readings', 'power_readings_1m')
 ORDER BY pg_total_relation_size(relid) DESC;
 ```
 
+Or use the helper script:
+
+```bash
+set -a
+source .env
+set +a
+./scripts/db_size.sh
+```
+
 ## Env Vars
 - `SHELLY_HOST`: IP or hostname of the Shelly device.
 - `SHELLY_TIMEOUT_MS`: RPC timeout in milliseconds.
