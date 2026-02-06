@@ -1,13 +1,13 @@
 # Shelly 3EM Collector
 
 **What it is**
-A small, headless collector that reads power/energy data from a Shelly 3EM‑63T Gen3 over RPC, stores it in PostgreSQL, and triggers HomeKit notifications by toggling a Homebridge virtual sensor.
+A small, headless collector that reads power/energy data from a Shelly 3EM‑63T Gen3 over RPC, stores it in PostgreSQL, and triggers HomeKit notifications by toggling a Homebridge virtual sensor. Written to be installed on Raspberry Pi, next to Homebridge installation.
 
 **What it does**
 - Polls `Shelly.GetStatus` for live power/voltage/current.
 - Ingests interval energy data from `EMData.GetRecords` + `EMData.GetData`.
 - Stores data in Postgres for analytics and cost calculations.
-- Triggers HomeKit notifications via `homebridge-http-webhooks`.
+- Triggers HomeKit notifications via [`homebridge-http-webhooks`](https://github.com/benzman81/homebridge-http-webhooks) plugin.
 
 **What’s included**
 - `collector/`: Python service (RPC polling, DB writes, alerts, webhook trigger)
@@ -115,15 +115,6 @@ set +a
 ./scripts/db_size.sh
 ```
 
-**Using the Collected Data (Next App Goals)**
-Ideas for your analytics web app:
-- Daily/weekly/monthly kWh from `energy_intervals`.
-- Cost models by tariff windows (peak/off‑peak) using `energy_intervals`.
-- Instant power trends from `power_readings` and long‑term trends from `power_readings_1m`.
-- Alerts/correlations for high‑power events with appliance signatures.
-
-If you share your tariff rules, I can add a `tariffs` table and helper queries.
-
 **Systemd Autostart (Docker Compose)**
 `deploy/shelly-3em-collector.service` runs `docker compose up -d` on boot.
 
@@ -133,3 +124,39 @@ sudo systemctl daemon-reload
 sudo systemctl enable shelly-3em-collector
 sudo systemctl start shelly-3em-collector
 ```
+
+**Using the Collected Data**
+Minimal examples to build your analytics UI.
+
+Tables:
+- `power_readings`: raw, high‑frequency snapshots
+- `power_readings_1m`: 1‑minute averages (downsampled)
+- `energy_intervals`: authoritative interval energy (Wh per period)
+- `alert_events`: alert history
+
+Example queries:
+
+```sql
+-- Latest live reading
+SELECT ts, total_power_w, phase_a_power_w, phase_b_power_w, phase_c_power_w
+FROM power_readings
+ORDER BY ts DESC
+LIMIT 1;
+
+-- Daily kWh (sum of intervals)
+SELECT
+  date_trunc('day', start_ts) AS day,
+  round(sum(energy_wh) / 1000.0, 3) AS kwh
+FROM energy_intervals
+WHERE channel = 3
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- Power trend (downsampled)
+SELECT ts_minute, avg_total_power_w
+FROM power_readings_1m
+ORDER BY ts_minute DESC
+LIMIT 1440; -- last 24h
+```
+
+If you share your tariff rules, I can add a `tariffs` table and cost queries.
