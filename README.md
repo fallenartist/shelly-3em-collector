@@ -1,6 +1,5 @@
 # Shelly 3EM Collector
 
-**What it is**
 A small, headless collector that reads power/energy data from a Shelly 3EM‑63T Gen3 over RPC, stores it in PostgreSQL, and triggers HomeKit notifications by toggling a Homebridge virtual sensor. Written to be installed on Raspberry Pi, next to Homebridge installation.
 
 **What it does**
@@ -67,6 +66,7 @@ python3 -m collector
 - `RETENTION_MAX_PRUNE_ITERATIONS`: max batches per run.
 
 **HomeKit Notifications (homebridge-http-webhooks)**
+
 Set a sensor accessory in Homebridge with:
 - `Type`: `motion` or `contact`
 - `Auto Release Time`: optional, e.g. 15s
@@ -91,6 +91,7 @@ TRIGGER_HTTP_METHOD=GET
 - `alert_events`, `alert_state`: alert history and state.
 
 **Retention Policy**
+
 Two‑step policy:
 1. Downsample raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into `power_readings_1m`.
 2. Optional size cap: if `RETENTION_MAX_DB_MB` is set, delete oldest raw rows in batches.
@@ -116,6 +117,7 @@ set +a
 ```
 
 **Systemd Autostart (Docker Compose)**
+
 `deploy/shelly-3em-collector.service` runs `docker compose up -d` on boot.
 
 ```bash
@@ -125,7 +127,7 @@ sudo systemctl enable shelly-3em-collector
 sudo systemctl start shelly-3em-collector
 ```
 
-**Using the Collected Data**
+## Using the Collected Data
 Minimal examples to build your analytics UI.
 
 Tables:
