@@ -158,5 +158,3 @@ FROM power_readings_1m
 ORDER BY ts_minute DESC
 LIMIT 1440; -- last 24h
 ```
-
-If you share your tariff rules, I can add a `tariffs` table and cost queries.
