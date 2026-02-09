@@ -34,3 +34,6 @@ class ShellyRpc:
 
     async def get_emdata_data(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return await self.call("EMData.GetData", params)
+
+    async def get_sys_config(self) -> dict[str, Any]:
+        return await self.call("Sys.GetConfig")

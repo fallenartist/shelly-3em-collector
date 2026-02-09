@@ -89,6 +89,7 @@ TRIGGER_HTTP_METHOD=GET
 - `energy_intervals`: interval energy data from EMData.
 - `power_readings_1m`: downsampled 1‑minute aggregates.
 - `alert_events`, `alert_state`: alert history and state.
+- `device_settings`: device timezone + location from `Sys.GetConfig`.
 - `tariffs` + `tariff_*`: flexible tariff schedules and pricing rules.
 
 **Tariffs (Flexible Model)**
@@ -105,6 +106,7 @@ Seed data (example Tauron G11/G12/G12w/G13 from `temp/tauron_calculator.tsx`):
 ```bash
 psql "$DATABASE_URL" -f migrations/002_tariffs_flexible.sql
 psql "$DATABASE_URL" -f migrations/003_seed_tariffs_tauron_2026.sql
+psql "$DATABASE_URL" -f migrations/004_device_timezone.sql
 ```
 
 **Using Tariffs In Apps**
@@ -145,6 +147,19 @@ Notes:
 - Time windows are local to `tariffs.timezone`.
 - Rules with no `day_type_id` apply to all days.
 - Rules with no `season_id` apply to all seasons.
+
+Use `energy_intervals_local` (view) for tariff alignment and local-day grouping:
+```sql
+SELECT
+  device_id,
+  channel,
+  local_day,
+  SUM(energy_wh) AS kwh
+FROM energy_intervals_local
+WHERE channel = 3
+GROUP BY 1, 2, 3
+ORDER BY local_day DESC;
+```
 
 **Retention Policy**
 

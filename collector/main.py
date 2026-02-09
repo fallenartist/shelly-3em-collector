@@ -4,6 +4,7 @@ import asyncio
 import signal
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from aiohttp import web
 
@@ -16,6 +17,7 @@ from .db import (
     insert_alert_event,
     insert_power_reading,
     prune_power_readings_by_size,
+    upsert_device_settings,
     upsert_energy_interval,
 )
 from .health import HealthState
@@ -35,6 +37,26 @@ def _utcnow() -> datetime:
 @dataclass
 class DeviceContext:
     device_id: str | None = None
+    timezone: str | None = None
+
+
+def _device_id_from_sys_config(payload: dict[str, Any]) -> str | None:
+    device = payload.get("device")
+    if isinstance(device, dict):
+        for key in ("mac", "id", "name"):
+            val = device.get(key)
+            if isinstance(val, str) and val.strip():
+                return val
+    return None
+
+
+def _timezone_from_sys_config(payload: dict[str, Any]) -> str | None:
+    location = payload.get("location")
+    if isinstance(location, dict):
+        tz = location.get("tz")
+        if isinstance(tz, str) and tz.strip():
+            return tz
+    return None
 
 
 async def live_poll_loop(
@@ -232,6 +254,21 @@ async def run() -> None:
     await pool.open()
 
     rpc = ShellyRpc(settings.shelly_base_url, settings.SHELLY_TIMEOUT_MS)
+
+    try:
+        sys_config = await rpc.get_sys_config()
+        tz = _timezone_from_sys_config(sys_config)
+        device_id = _device_id_from_sys_config(sys_config) or device_ctx.device_id
+        location = sys_config.get("location") if isinstance(sys_config.get("location"), dict) else None
+        if device_id:
+            await upsert_device_settings(pool, device_id, tz, location, sys_config)
+            device_ctx.device_id = device_id
+            device_ctx.timezone = tz
+            log("device.config", device_id=device_id, timezone=tz)
+        else:
+            log("device.config.missing_id")
+    except Exception as exc:  # noqa: BLE001
+        log("device.config.error", error=str(exc))
 
     trigger = HttpTrigger(
         settings.TRIGGER_HTTP_URL,

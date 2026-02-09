@@ -25,6 +25,36 @@ def _to_jsonb(value: Any) -> Any:
     return value
 
 
+async def upsert_device_settings(
+    pool: AsyncConnectionPool,
+    device_id: str,
+    timezone: str | None,
+    location: dict[str, Any] | None,
+    config: dict[str, Any] | None,
+) -> None:
+    query = """
+        INSERT INTO device_settings (
+            device_id, timezone, location, config, last_seen_ts
+        ) VALUES (
+            %(device_id)s, %(timezone)s, %(location)s, %(config)s, now() AT TIME ZONE 'utc'
+        )
+        ON CONFLICT (device_id) DO UPDATE SET
+            timezone = EXCLUDED.timezone,
+            location = EXCLUDED.location,
+            config = EXCLUDED.config,
+            last_seen_ts = EXCLUDED.last_seen_ts
+    """
+    params = {
+        "device_id": device_id,
+        "timezone": timezone,
+        "location": _to_jsonb(location),
+        "config": _to_jsonb(config),
+    }
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, params)
+
+
 async def downsample_power_readings(pool: AsyncConnectionPool, older_than_hours: int) -> int:
     query = """
         INSERT INTO power_readings_1m (
