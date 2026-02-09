@@ -13,6 +13,7 @@ from .config import Settings
 from .db import (
     create_pool,
     delete_power_readings_older_than,
+    delete_power_readings_1m_older_than,
     downsample_power_readings,
     insert_alert_event,
     insert_power_reading,
@@ -189,6 +190,8 @@ async def retention_loop(
     pool,
     run_seconds: int,
     downsample_after_hours: int | None,
+    low_res_minutes: int,
+    low_res_max_days: int | None,
     max_db_mb: int | None,
     prune_batch: int,
     max_prune_iterations: int,
@@ -198,14 +201,24 @@ async def retention_loop(
     while not stop.is_set():
         try:
             if downsample_after_hours and downsample_after_hours > 0:
-                inserted = await downsample_power_readings(pool, downsample_after_hours)
+                inserted = await downsample_power_readings(
+                    pool,
+                    downsample_after_hours,
+                    low_res_minutes * 60,
+                )
                 deleted = await delete_power_readings_older_than(pool, downsample_after_hours)
                 log(
                     "retention.downsample",
                     inserted=inserted,
                     deleted=deleted,
                     older_than_hours=downsample_after_hours,
+                    low_res_minutes=low_res_minutes,
                 )
+
+            if low_res_max_days and low_res_max_days > 0:
+                low_res_deleted = await delete_power_readings_1m_older_than(pool, low_res_max_days)
+                if low_res_deleted:
+                    log("retention.low_res_prune", deleted=low_res_deleted, older_than_days=low_res_max_days)
 
             if max_db_mb and max_db_mb > 0:
                 max_bytes = int(max_db_mb * 1024 * 1024)
@@ -334,6 +347,8 @@ async def run() -> None:
                 pool,
                 settings.RETENTION_RUN_SECONDS,
                 settings.RETENTION_DOWNSAMPLE_AFTER_HOURS,
+                settings.RETENTION_LOW_RES_MINUTES,
+                settings.RETENTION_LOW_RES_MAX_DAYS,
                 settings.RETENTION_MAX_DB_MB,
                 settings.RETENTION_PRUNE_BATCH,
                 settings.RETENTION_MAX_PRUNE_ITERATIONS,

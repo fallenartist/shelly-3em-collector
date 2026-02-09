@@ -55,7 +55,12 @@ async def upsert_device_settings(
             await cur.execute(query, params)
 
 
-async def downsample_power_readings(pool: AsyncConnectionPool, older_than_hours: int) -> int:
+async def downsample_power_readings(
+    pool: AsyncConnectionPool,
+    older_than_hours: int,
+    bucket_seconds: int,
+) -> int:
+    bucket_seconds = max(60, int(bucket_seconds))
     query = """
         INSERT INTO power_readings_1m (
             ts_minute,
@@ -73,7 +78,9 @@ async def downsample_power_readings(pool: AsyncConnectionPool, older_than_hours:
             samples
         )
         SELECT
-            date_trunc('minute', ts) AS ts_minute,
+            (timestamptz 'epoch'
+             + floor(extract(epoch from ts) / %(bucket_seconds)s)
+             * %(bucket_seconds)s * interval '1 second') AS ts_minute,
             COALESCE(device_id, 'unknown') AS device_id,
             avg(total_power_w),
             avg(phase_a_power_w),
@@ -93,7 +100,7 @@ async def downsample_power_readings(pool: AsyncConnectionPool, older_than_hours:
     """
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(query, {"hours": older_than_hours})
+            await cur.execute(query, {"hours": older_than_hours, "bucket_seconds": bucket_seconds})
             return cur.rowcount or 0
 
 
@@ -105,6 +112,17 @@ async def delete_power_readings_older_than(pool: AsyncConnectionPool, older_than
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(query, {"hours": older_than_hours})
+            return cur.rowcount or 0
+
+
+async def delete_power_readings_1m_older_than(pool: AsyncConnectionPool, older_than_days: int) -> int:
+    query = """
+        DELETE FROM power_readings_1m
+        WHERE ts_minute < (now() AT TIME ZONE 'utc') - (%(days)s || ' days')::interval
+    """
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, {"days": older_than_days})
             return cur.rowcount or 0
 
 

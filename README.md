@@ -61,6 +61,8 @@ python3 -m collector
 - `HEALTHZ_PORT`: health and test endpoints.
 - `RETENTION_RUN_SECONDS`: retention cadence.
 - `RETENTION_DOWNSAMPLE_AFTER_HOURS`: keep raw data for N hours.
+- `RETENTION_LOW_RES_MINUTES`: low‑res bucket size (minutes) for `power_readings_1m`.
+- `RETENTION_LOW_RES_MAX_DAYS`: optional retention window for low‑res rows.
 - `RETENTION_MAX_DB_MB`: optional DB size cap for pruning.
 - `RETENTION_PRUNE_BATCH`: rows per prune batch.
 - `RETENTION_MAX_PRUNE_ITERATIONS`: max batches per run.
@@ -87,7 +89,7 @@ TRIGGER_HTTP_METHOD=GET
 **Data Model (Core Tables)**
 - `power_readings`: live snapshots (high‑frequency).
 - `energy_intervals`: interval energy data from EMData.
-- `power_readings_1m`: downsampled 1‑minute aggregates.
+- `power_readings_1m`: downsampled aggregates (bucket size via `RETENTION_LOW_RES_MINUTES`).
 - `alert_events`, `alert_state`: alert history and state.
 - `device_settings`: device timezone + location from `Sys.GetConfig`.
 - `tariffs` + `tariff_*`: flexible tariff schedules and pricing rules.
@@ -178,11 +180,15 @@ Notes:
 
 **Retention Policy**
 
-Two‑step policy:
-1. Downsample raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into `power_readings_1m`.
-2. Optional size cap: if `RETENTION_MAX_DB_MB` is set, delete oldest raw rows in batches.
+Three‑step policy:
+1. Downsample raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into `power_readings_1m`
+   using `RETENTION_LOW_RES_MINUTES` as the bucket size.
+2. Optional low‑res retention: if `RETENTION_LOW_RES_MAX_DAYS` is set, delete old rows from `power_readings_1m`.
+3. Optional size cap: if `RETENTION_MAX_DB_MB` is set, delete oldest raw rows in batches.
 
-Default raw retention is 7 days (`RETENTION_DOWNSAMPLE_AFTER_HOURS=168`).
+Defaults:
+- Raw retention: 7 days (`RETENTION_DOWNSAMPLE_AFTER_HOURS=168`)
+- Low‑res bucket: 1 minute (`RETENTION_LOW_RES_MINUTES=1`)
 
 **EMData Retention (Device vs Cloud)**
 

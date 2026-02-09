@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     # Retention
     RETENTION_RUN_SECONDS: int = 3600
     RETENTION_DOWNSAMPLE_AFTER_HOURS: int | None = 24
+    RETENTION_LOW_RES_MINUTES: int = 1
+    RETENTION_LOW_RES_MAX_DAYS: int | None = None
     RETENTION_MAX_DB_MB: int | None = None
     RETENTION_PRUNE_BATCH: int = 20000
     RETENTION_MAX_PRUNE_ITERATIONS: int = 20
