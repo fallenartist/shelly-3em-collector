@@ -89,6 +89,23 @@ TRIGGER_HTTP_METHOD=GET
 - `energy_intervals`: interval energy data from EMData.
 - `power_readings_1m`: downsampled 1‑minute aggregates.
 - `alert_events`, `alert_state`: alert history and state.
+- `tariffs` + `tariff_*`: flexible tariff schedules and pricing rules.
+
+**Tariffs (Flexible Model)**
+Additional tables support complex pricing (TOU, seasons, tiers, fixed/demand charges):
+- `tariffs`: plan metadata (currency, timezone, provider, validity).
+- `tariff_components`: cost components (energy, distribution, demand, fixed, tax, export).
+- `tariff_rules`: priced rules with optional day type, season, effective dates, and tier bounds.
+- `tariff_rule_windows`: time windows for peak/off‑peak/shoulder rules.
+- `tariff_day_types`: weekday/weekend/holiday definitions via DOW bitmasks.
+- `tariff_seasons`: seasonal date ranges (with optional year for one‑offs).
+- `tariff_holidays`: holiday dates for day‑type overrides.
+
+Seed data (example Tauron G11/G12/G12w/G13 from `temp/tauron_calculator.tsx`):
+```bash
+psql "$DATABASE_URL" -f migrations/002_tariffs_flexible.sql
+psql "$DATABASE_URL" -f migrations/003_seed_tariffs_tauron_2026.sql
+```
 
 **Retention Policy**
 
