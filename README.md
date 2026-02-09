@@ -92,6 +92,41 @@ TRIGGER_HTTP_METHOD=GET
 - `device_settings`: device timezone + location from `Sys.GetConfig`.
 - `tariffs` + `tariff_*`: flexible tariff schedules and pricing rules.
 
+**Schema Add‑Ons**
+Apply these after `migrations/001_init.sql` as needed:
+```bash
+# Tariff schema + example Tauron seed data
+psql "$DATABASE_URL" -f migrations/002_tariffs_flexible.sql
+psql "$DATABASE_URL" -f migrations/003_seed_tariffs_tauron_2026.sql
+
+# Device timezone + local‑time views
+psql "$DATABASE_URL" -f migrations/004_device_timezone.sql
+```
+
+**Device Timezone & Local Day**
+On startup the collector calls `Sys.GetConfig`, reads `location.tz`, and upserts into `device_settings`.
+Restart the collector after applying `migrations/004_device_timezone.sql` so the table is populated.
+
+Inspect the device settings:
+```sql
+SELECT device_id, timezone, location, last_seen_ts
+FROM device_settings
+ORDER BY last_seen_ts DESC;
+```
+
+Use local‑time views for daily grouping and tariff alignment:
+```sql
+SELECT
+  device_id,
+  channel,
+  local_day,
+  SUM(energy_wh) AS kwh
+FROM energy_intervals_local
+WHERE channel = 3
+GROUP BY 1, 2, 3
+ORDER BY local_day DESC;
+```
+
 **Tariffs (Flexible Model)**
 Additional tables support complex pricing (TOU, seasons, tiers, fixed/demand charges):
 - `tariffs`: plan metadata (currency, timezone, provider, validity).
@@ -101,13 +136,6 @@ Additional tables support complex pricing (TOU, seasons, tiers, fixed/demand cha
 - `tariff_day_types`: weekday/weekend/holiday definitions via DOW bitmasks.
 - `tariff_seasons`: seasonal date ranges (with optional year for one‑offs).
 - `tariff_holidays`: holiday dates for day‑type overrides.
-
-Seed data (example Tauron G11/G12/G12w/G13 from `temp/tauron_calculator.tsx`):
-```bash
-psql "$DATABASE_URL" -f migrations/002_tariffs_flexible.sql
-psql "$DATABASE_URL" -f migrations/003_seed_tariffs_tauron_2026.sql
-psql "$DATABASE_URL" -f migrations/004_device_timezone.sql
-```
 
 **Using Tariffs In Apps**
 Recommended query pattern for “current tariff”:
@@ -147,19 +175,6 @@ Notes:
 - Time windows are local to `tariffs.timezone`.
 - Rules with no `day_type_id` apply to all days.
 - Rules with no `season_id` apply to all seasons.
-
-Use `energy_intervals_local` (view) for tariff alignment and local-day grouping:
-```sql
-SELECT
-  device_id,
-  channel,
-  local_day,
-  SUM(energy_wh) AS kwh
-FROM energy_intervals_local
-WHERE channel = 3
-GROUP BY 1, 2, 3
-ORDER BY local_day DESC;
-```
 
 **Retention Policy**
 
