@@ -98,6 +98,16 @@ Two‑step policy:
 
 Default raw retention is 7 days (`RETENTION_DOWNSAMPLE_AFTER_HOURS=168`).
 
+**EMData Retention (Device vs Cloud)**
+
+Shelly Gen3 keeps a rolling window of interval data locally. The exact window depends on device storage and period length.
+
+Example from our device on **2026-02-09 UTC**:
+- `EMData.GetRecords` reported a single block from **2026-02-02 06:00:00+00** to **2026-02-09 09:16:00+00** with a 60‑second period.
+- Data earlier than that was not available via local RPC.
+
+If you need older history (e.g., daily totals from the Shelly app), use the Shelly Cloud CSV export. Local RPC will only return what `EMData.GetRecords` advertises.
+
 **Monitor DB Size**
 ```sql
 SELECT pg_size_pretty(pg_database_size(current_database())) AS db_size;
