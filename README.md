@@ -107,6 +107,45 @@ psql "$DATABASE_URL" -f migrations/002_tariffs_flexible.sql
 psql "$DATABASE_URL" -f migrations/003_seed_tariffs_tauron_2026.sql
 ```
 
+**Using Tariffs In Apps**
+Recommended query pattern for “current tariff”:
+```sql
+-- Find active tariffs for a given date (pick the one you want by name/provider/region).
+SELECT *
+FROM tariffs
+WHERE (valid_from IS NULL OR valid_from <= CURRENT_DATE)
+  AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+ORDER BY id DESC;
+```
+
+Join helpers (example: list all rules/windows for a tariff):
+```sql
+SELECT
+  t.name AS tariff,
+  c.name AS component,
+  c.kind,
+  c.unit,
+  r.rate,
+  r.priority,
+  dt.name AS day_type,
+  s.name AS season,
+  w.start_time,
+  w.end_time
+FROM tariffs t
+JOIN tariff_components c ON c.tariff_id = t.id
+JOIN tariff_rules r ON r.component_id = c.id
+LEFT JOIN tariff_day_types dt ON dt.id = r.day_type_id
+LEFT JOIN tariff_seasons s ON s.id = r.season_id
+LEFT JOIN tariff_rule_windows w ON w.rule_id = r.id
+WHERE t.name = 'Tauron G12 (2026)'
+ORDER BY c.priority, r.priority, w.start_time;
+```
+
+Notes:
+- Time windows are local to `tariffs.timezone`.
+- Rules with no `day_type_id` apply to all days.
+- Rules with no `season_id` apply to all seasons.
+
 **Retention Policy**
 
 Two‑step policy:
