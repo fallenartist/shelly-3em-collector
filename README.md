@@ -40,6 +40,8 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 python3 -m collector
 ```
+Notes:
+- Python 3.10+ recommended. Python 3.9 is supported via `eval_type_backport` (included in `requirements.txt`).
 
 **Configuration**
 The collector reads env vars from `.env` (see `.env.example`). Defaults below are from code; any value
