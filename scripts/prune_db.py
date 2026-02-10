@@ -9,7 +9,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from collector.config import Settings
+try:
+    from collector.config import Settings
+except ModuleNotFoundError as exc:
+    missing = exc.name or "dependency"
+    if missing.startswith("pydantic"):
+        print("Missing dependencies. Install with:")
+        print("  python3 -m pip install -r requirements.txt")
+        raise SystemExit(1) from exc
+    raise
 from collector.db import (
     create_pool,
     delete_energy_intervals_older_than,

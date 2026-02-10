@@ -197,6 +197,28 @@ GROUP BY 1, 2, 3
 ORDER BY local_day DESC;
 ```
 
+**Using Interval Data In Apps**
+Use `energy_intervals` for **short‑term, high‑resolution** kWh (1‑minute), and
+`energy_intervals_1h` for **long‑term** kWh (hourly).
+
+Hourly kWh totals:
+```sql
+SELECT ts_hour, device_id, channel, energy_wh
+FROM energy_intervals_1h
+WHERE channel = 3
+ORDER BY ts_hour DESC
+LIMIT 720;
+```
+
+Recent 1‑minute kWh (last 24h):
+```sql
+SELECT start_ts, device_id, channel, energy_wh
+FROM energy_intervals
+WHERE channel = 3
+  AND start_ts >= (now() AT TIME ZONE 'utc') - interval '24 hours'
+ORDER BY start_ts DESC;
+```
+
 **Tariffs (Flexible Model)**
 Additional tables support complex pricing (TOU, seasons, tiers, fixed/demand charges):
 - `tariffs`: plan metadata (currency, timezone, provider, validity).
