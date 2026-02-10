@@ -96,6 +96,12 @@ TRIGGER_HTTP_METHOD=GET
 - `device_settings`: device timezone + location from `Sys.GetConfig`.
 - `tariffs` + `tariff_*`: flexible tariff schedules and pricing rules.
 
+Why keep both `energy_intervals` and downsampled `power_readings_1m`?
+- `energy_intervals` are **authoritative kWh** from the meter’s internal storage. Best for tariffs,
+  daily/monthly totals, and long‑term consumption accuracy.
+- `power_readings_1m` are **averaged power snapshots**. Best for **behavior patterns** (load shape,
+  peaks, weekday/weekend differences) that energy totals alone can’t show.
+
 **Schema Add‑Ons**
 Apply these after `migrations/001_init.sql` as needed:
 ```bash
@@ -193,6 +199,24 @@ Three‑step policy:
 Defaults:
 - Raw retention: 7 days (`RETENTION_DOWNSAMPLE_AFTER_HOURS=168`)
 - Low‑res bucket: 1 minute (`RETENTION_LOW_RES_MINUTES=1`)
+
+**Recommended Settings**
+Goal: understand **behavior patterns** (typical day/workweek/weekend) and keep **long‑term kWh**.
+
+Balanced default (good signal, reasonable DB growth):
+- `POLL_LIVE_SECONDS=10`
+- `POLL_INTERVAL_DATA_SECONDS=300` (device period is usually 60s)
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS=720` (keep 30 days of high‑res)
+- `RETENTION_LOW_RES_MINUTES=5` (5‑minute buckets are enough for behavior patterns)
+- `RETENTION_LOW_RES_MAX_DAYS=365` (1 year of low‑res shape)
+- `RETENTION_INTERVAL_MAX_DAYS=730` (2 years of kWh totals)
+- `RETENTION_MAX_DB_MB` optional (set if you need a hard cap)
+
+If you want more detail in behavior patterns:
+- Lower `RETENTION_LOW_RES_MINUTES` to `1` (more storage).
+
+If you only care about long‑term kWh:
+- You can raise `RETENTION_LOW_RES_MINUTES` (e.g. 15) or set `RETENTION_LOW_RES_MAX_DAYS`.
 
 **EMData Retention (Device vs Cloud)**
 
