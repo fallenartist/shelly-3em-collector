@@ -118,7 +118,8 @@ If you only care about long‑term kWh:
 - Increase `RETENTION_LOW_RES_MINUTES` (e.g. 15) or set `RETENTION_LOW_RES_MAX_DAYS`.
 
 **One‑Off Prune Script**
-Use this to apply the current `.env` retention settings immediately:
+Use this to apply the current `.env` retention settings immediately. The script prompts for
+confirmation unless you pass `--yes`.
 ```bash
 python3 scripts/prune_db.py --yes
 ```

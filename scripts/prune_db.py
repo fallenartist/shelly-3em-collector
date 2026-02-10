@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Apply changes. Without this flag, the script exits after printing the plan.",
+        help="Apply changes without confirmation prompt.",
     )
     return parser.parse_args()
 
@@ -58,8 +58,14 @@ async def run() -> None:
     print(f"- RETENTION_PRUNE_INCLUDE_INTERVALS={settings.RETENTION_PRUNE_INCLUDE_INTERVALS}")
 
     if not args.yes:
-        print("Dry run only. Re-run with --yes to apply.")
-        return
+        try:
+            response = input("Proceed with pruning? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("Aborted.")
+            return
+        if response not in ("y", "yes"):
+            print("Aborted.")
+            return
 
     pool = create_pool(settings.DATABASE_URL)
     await pool.open()
