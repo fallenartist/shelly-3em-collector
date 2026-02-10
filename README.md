@@ -58,6 +58,10 @@ set in `.env` overrides the default. `.env.example` may suggest more production�
 - `EM_DATA_ID` (default `0`): EMData component id (`emdata:0` → `0`).
 - `EMDATA_LOOKBACK_RECORDS` (default `720`): how many interval records to backfill on startup.
   Higher = slower startup, more gap‑filling.
+- `EMDATA_MAX_RECORDS` (default `500`): max records per `EMData.GetData` call. Lower = smaller
+  payloads and safer backfills; higher = fewer calls.
+- `EMDATA_MAX_CHUNKS_PER_POLL` (default `4`): max chunks per interval poll loop. Increase for
+  faster catch‑up after downtime.
 
 **Database**
 - `DATABASE_URL` (required): Postgres connection string.

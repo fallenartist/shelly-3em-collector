@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     POLL_INTERVAL_DATA_SECONDS: int = 300
     EM_DATA_ID: int = 0
     EMDATA_LOOKBACK_RECORDS: int = 720
+    EMDATA_MAX_RECORDS: int = 500
+    EMDATA_MAX_CHUNKS_PER_POLL: int = 4
 
     # Database
     DATABASE_URL: str

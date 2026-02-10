@@ -117,6 +117,8 @@ async def interval_poll_loop(
     device_ctx: DeviceContext,
     emdata_id: int,
     lookback_records: int,
+    max_records_per_call: int,
+    max_chunks_per_poll: int,
     poll_seconds: int,
     health: HealthState,
     stop: asyncio.Event,
@@ -162,27 +164,40 @@ async def interval_poll_loop(
                 await asyncio.sleep(poll_seconds)
                 continue
 
-            data_payload = await rpc.get_emdata_data(
-                {"id": emdata_id, "ts": int(start_ts.timestamp()), "end_ts": int(block_end.timestamp())}
-            )
-            intervals = list(parse_emdata_data(data_payload, device_ctx.device_id))
+            max_records = max(1, int(max_records_per_call))
+            max_chunks = max(1, int(max_chunks_per_poll))
             inserted = 0
-            for interval in intervals:
-                await upsert_energy_interval(
-                    pool,
-                    interval.device_id,
-                    interval.channel,
-                    interval.start_ts,
-                    interval.end_ts,
-                    interval.energy_wh,
-                    interval.avg_power_w,
-                    interval.meta,
+            chunks = 0
+            chunk_start = start_ts
+            while chunk_start <= block_end and chunks < max_chunks:
+                chunk_end = min(block_end, chunk_start + timedelta(seconds=period * (max_records - 1)))
+                data_payload = await rpc.get_emdata_data(
+                    {"id": emdata_id, "ts": int(chunk_start.timestamp()), "end_ts": int(chunk_end.timestamp())}
                 )
-                inserted += 1
-            if intervals:
-                last_record_ts = max(i.start_ts for i in intervals)
+                intervals = list(parse_emdata_data(data_payload, device_ctx.device_id))
+                for interval in intervals:
+                    await upsert_energy_interval(
+                        pool,
+                        interval.device_id,
+                        interval.channel,
+                        interval.start_ts,
+                        interval.end_ts,
+                        interval.energy_wh,
+                        interval.avg_power_w,
+                        interval.meta,
+                    )
+                    inserted += 1
+                last_record_ts = chunk_end
+                chunk_start = chunk_end + timedelta(seconds=period)
+                chunks += 1
             health.last_interval_poll = _utcnow()
-            log("intervals.ingested", count=inserted)
+            log(
+                "intervals.ingested",
+                count=inserted,
+                chunks=chunks,
+                start_ts=start_ts,
+                end_ts=last_record_ts,
+            )
         except Exception as exc:  # noqa: BLE001
             health.last_error = str(exc)
             log("poll.error", loop="interval", error=str(exc))
@@ -375,6 +390,8 @@ async def run() -> None:
                 device_ctx,
                 settings.EM_DATA_ID,
                 settings.EMDATA_LOOKBACK_RECORDS,
+                settings.EMDATA_MAX_RECORDS,
+                settings.EMDATA_MAX_CHUNKS_PER_POLL,
                 settings.POLL_INTERVAL_DATA_SECONDS,
                 health,
                 stop,
