@@ -41,33 +41,87 @@ python3 -m pip install -r requirements.txt
 python3 -m collector
 ```
 
-**Configuration (Env Vars)**
-- `SHELLY_HOST`: Shelly IP or hostname.
-- `SHELLY_TIMEOUT_MS`: RPC timeout in ms.
-- `POLL_LIVE_SECONDS`: live poll interval.
-- `POLL_INTERVAL_DATA_SECONDS`: EMData poll interval.
-- `EM_DATA_ID`: EMData component id (`emdata:0` → `0`).
-- `EMDATA_LOOKBACK_RECORDS`: backfill interval count on startup.
-- `DATABASE_URL`: Postgres connection string.
-- `ALERT_POWER_W`: power threshold to trigger.
-- `ALERT_SUSTAIN_SECONDS`: seconds above threshold before trigger.
-- `ALERT_COOLDOWN_SECONDS`: cooldown between alerts.
-- `ALERT_TRIGGER_SECONDS`: how long to keep sensor ON.
+**Configuration**
+The collector reads env vars from `.env` (see `.env.example`). Defaults below are from code; any value
+set in `.env` overrides the default. `.env.example` may suggest more production‑friendly values.
+
+**Shelly & RPC**
+- `SHELLY_HOST` (required): Shelly IP/hostname.
+- `SHELLY_TIMEOUT_MS` (default `5000`): RPC timeout in ms. Lower = faster failure on network issues.
+
+**Polling**
+- `POLL_LIVE_SECONDS` (default `10`): live snapshot cadence. Lower = higher resolution + more DB growth.
+- `POLL_INTERVAL_DATA_SECONDS` (default `300`): EMData poll cadence. Lower = fresher interval data;
+  higher = more lag, same total interval volume.
+- `EM_DATA_ID` (default `0`): EMData component id (`emdata:0` → `0`).
+- `EMDATA_LOOKBACK_RECORDS` (default `720`): how many interval records to backfill on startup.
+  Higher = slower startup, more gap‑filling.
+
+**Database**
+- `DATABASE_URL` (required): Postgres connection string.
+
+**Alerts**
+- `ALERT_POWER_W` (default `4500`): power threshold to trigger.
+- `ALERT_SUSTAIN_SECONDS` (default `120`): seconds above threshold before trigger.
+- `ALERT_COOLDOWN_SECONDS` (default `900`): cooldown between alerts.
+- `ALERT_TRIGGER_SECONDS` (default `15`): how long to keep sensor ON.
+
+**HomeKit Trigger**
 - `TRIGGER_HTTP_URL`: base URL with `{state}` or `/on`/`/off`.
 - `TRIGGER_HTTP_ON_URL`: explicit ON URL.
 - `TRIGGER_HTTP_OFF_URL`: explicit OFF URL.
-- `TRIGGER_HTTP_METHOD`: `GET` or `POST`.
+- `TRIGGER_HTTP_METHOD` (default `POST`): `GET` or `POST`.
+
+**Service**
+- `HEALTHZ_PORT` (default `8080`): health and test endpoints.
 - `TEST_TRIGGER_TOKEN`: optional token for `/trigger/test`.
-- `HEALTHZ_PORT`: health and test endpoints.
-- `RETENTION_RUN_SECONDS`: retention cadence.
-- `RETENTION_DOWNSAMPLE_AFTER_HOURS`: keep raw data for N hours.
-- `RETENTION_LOW_RES_MINUTES`: low‑res bucket size (minutes) for `power_readings_1m`.
-- `RETENTION_LOW_RES_MAX_DAYS`: optional retention window for low‑res rows.
-- `RETENTION_INTERVAL_MAX_DAYS`: optional retention window for `energy_intervals`.
-- `RETENTION_MAX_DB_MB`: optional DB size cap; prunes oldest rows across raw + low‑res.
-- `RETENTION_PRUNE_INCLUDE_INTERVALS`: include `energy_intervals` in size‑cap pruning.
-- `RETENTION_PRUNE_BATCH`: rows per prune batch.
-- `RETENTION_MAX_PRUNE_ITERATIONS`: max batches per run.
+
+**Retention & Storage**
+- `RETENTION_RUN_SECONDS` (default `3600`): retention loop cadence.
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS` (default `24`): keep raw data for N hours before downsampling.
+  Set to `0`/empty to disable downsampling.
+- `RETENTION_LOW_RES_MINUTES` (default `1`): bucket size for low‑res rows. Higher = smaller DB,
+  less detail.
+- `RETENTION_LOW_RES_MAX_DAYS` (default `null`): optional retention window for low‑res rows.
+- `RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS` (default `1`): keep 1‑minute interval rows for N days,
+  then downsample into hourly buckets.
+- `RETENTION_INTERVAL_LOW_RES_HOURS` (default `1`): bucket size for `energy_intervals_1h`.
+- `RETENTION_INTERVAL_LOW_RES_MAX_DAYS` (default `null`): optional retention window for hourly rows.
+- `RETENTION_MAX_DB_MB` (default `null`): optional size cap. When exceeded, oldest rows are deleted
+  across raw + low‑res. If `RETENTION_PRUNE_INCLUDE_INTERVALS=true`, interval rows can be pruned too.
+- `RETENTION_PRUNE_INCLUDE_INTERVALS` (default `false`): include `energy_intervals` in size‑cap pruning.
+
+Prune behavior details (when `RETENTION_MAX_DB_MB` is set):
+- The collector computes a **time cutoff** and deletes all rows **older than that cutoff**
+  across `power_readings` and `power_readings_1m` (and interval tables if enabled).
+- The cutoff is estimated from the current storage size and the age span of the included tables,
+  so dense data doesn’t get unfairly over‑pruned.
+
+**Recommended Profiles**
+Goal: understand **behavior patterns** (typical day/workweek/weekend) and keep **long‑term kWh**.
+
+Balanced default (good signal, reasonable DB growth):
+- `POLL_LIVE_SECONDS=10`
+- `POLL_INTERVAL_DATA_SECONDS=300` (device period is usually 60s)
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS=720` (keep ~30 days of high‑res)
+- `RETENTION_LOW_RES_MINUTES=5` (good for behavior patterns)
+- `RETENTION_LOW_RES_MAX_DAYS=365` (1 year of low‑res shape)
+- `RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS=1` (keep 1‑minute intervals for 1 day)
+- `RETENTION_INTERVAL_LOW_RES_HOURS=1` (hourly kWh long‑term)
+
+If you want more detail in behavior patterns:
+- Lower `RETENTION_LOW_RES_MINUTES` to `1` (more storage).
+
+If you only care about long‑term kWh:
+- Increase `RETENTION_LOW_RES_MINUTES` (e.g. 15) or set `RETENTION_LOW_RES_MAX_DAYS`.
+
+**One‑Off Prune Script**
+Use this to apply the current `.env` retention settings immediately:
+```bash
+python3 scripts/prune_db.py --yes
+```
+This is irreversible. If you changed settings to **higher resolution** than before, the script
+cannot recreate missing data.
 
 **HomeKit Notifications (homebridge-http-webhooks)**
 
@@ -91,6 +145,7 @@ TRIGGER_HTTP_METHOD=GET
 **Data Model (Core Tables)**
 - `power_readings`: live snapshots (high‑frequency).
 - `energy_intervals`: interval energy data from EMData.
+- `energy_intervals_1h`: downsampled hourly kWh (from `energy_intervals`).
 - `power_readings_1m`: downsampled aggregates (bucket size via `RETENTION_LOW_RES_MINUTES`).
 - `alert_events`, `alert_state`: alert history and state.
 - `device_settings`: device timezone + location from `Sys.GetConfig`.
@@ -101,6 +156,8 @@ Why keep both `energy_intervals` and downsampled `power_readings_1m`?
   daily/monthly totals, and long‑term consumption accuracy.
 - `power_readings_1m` are **averaged power snapshots**. Best for **behavior patterns** (load shape,
   peaks, weekday/weekend differences) that energy totals alone can’t show.
+For long‑term storage, `energy_intervals` are downsampled into `energy_intervals_1h` based on
+`RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS` and `RETENTION_INTERVAL_LOW_RES_HOURS`.
 
 **Schema Add‑Ons**
 Apply these after `migrations/001_init.sql` as needed:
@@ -111,6 +168,9 @@ psql "$DATABASE_URL" -f migrations/003_seed_tariffs_tauron_2026.sql
 
 # Device timezone + local‑time views
 psql "$DATABASE_URL" -f migrations/004_device_timezone.sql
+
+# Hourly interval table (downsampled kWh)
+psql "$DATABASE_URL" -f migrations/005_energy_intervals_1h.sql
 ```
 
 **Device Timezone & Local Day**
@@ -185,38 +245,6 @@ Notes:
 - Time windows are local to `tariffs.timezone`.
 - Rules with no `day_type_id` apply to all days.
 - Rules with no `season_id` apply to all seasons.
-
-**Retention Policy**
-
-Three‑step policy:
-1. Downsample raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into `power_readings_1m`
-   using `RETENTION_LOW_RES_MINUTES` as the bucket size.
-2. Optional low‑res retention: if `RETENTION_LOW_RES_MAX_DAYS` is set, delete old rows from `power_readings_1m`.
-3. Optional interval retention: if `RETENTION_INTERVAL_MAX_DAYS` is set, delete old rows from `energy_intervals`.
-4. Optional size cap: if `RETENTION_MAX_DB_MB` is set, delete oldest rows across raw + low‑res. If
-   `RETENTION_PRUNE_INCLUDE_INTERVALS=true`, interval rows are pruned too.
-
-Defaults:
-- Raw retention: 7 days (`RETENTION_DOWNSAMPLE_AFTER_HOURS=168`)
-- Low‑res bucket: 1 minute (`RETENTION_LOW_RES_MINUTES=1`)
-
-**Recommended Settings**
-Goal: understand **behavior patterns** (typical day/workweek/weekend) and keep **long‑term kWh**.
-
-Balanced default (good signal, reasonable DB growth):
-- `POLL_LIVE_SECONDS=10`
-- `POLL_INTERVAL_DATA_SECONDS=300` (device period is usually 60s)
-- `RETENTION_DOWNSAMPLE_AFTER_HOURS=720` (keep 30 days of high‑res)
-- `RETENTION_LOW_RES_MINUTES=5` (5‑minute buckets are enough for behavior patterns)
-- `RETENTION_LOW_RES_MAX_DAYS=365` (1 year of low‑res shape)
-- `RETENTION_INTERVAL_MAX_DAYS=730` (2 years of kWh totals)
-- `RETENTION_MAX_DB_MB` optional (set if you need a hard cap)
-
-If you want more detail in behavior patterns:
-- Lower `RETENTION_LOW_RES_MINUTES` to `1` (more storage).
-
-If you only care about long‑term kWh:
-- You can raise `RETENTION_LOW_RES_MINUTES` (e.g. 15) or set `RETENTION_LOW_RES_MAX_DAYS`.
 
 **EMData Retention (Device vs Cloud)**
 

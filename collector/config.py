@@ -40,11 +40,11 @@ class Settings(BaseSettings):
     RETENTION_DOWNSAMPLE_AFTER_HOURS: int | None = 24
     RETENTION_LOW_RES_MINUTES: int = 1
     RETENTION_LOW_RES_MAX_DAYS: int | None = None
-    RETENTION_INTERVAL_MAX_DAYS: int | None = None
+    RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS: int | None = 1
+    RETENTION_INTERVAL_LOW_RES_HOURS: int = 1
+    RETENTION_INTERVAL_LOW_RES_MAX_DAYS: int | None = None
     RETENTION_MAX_DB_MB: int | None = None
     RETENTION_PRUNE_INCLUDE_INTERVALS: bool = False
-    RETENTION_PRUNE_BATCH: int = 20000
-    RETENTION_MAX_PRUNE_ITERATIONS: int = 20
 
     @property
     def shelly_base_url(self) -> str:

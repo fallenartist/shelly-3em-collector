@@ -15,7 +15,9 @@ from .db import (
     delete_power_readings_older_than,
     delete_power_readings_1m_older_than,
     delete_energy_intervals_older_than,
+    delete_energy_intervals_1h_older_than,
     downsample_power_readings,
+    downsample_energy_intervals,
     insert_alert_event,
     insert_power_reading,
     prune_power_storage_by_size,
@@ -193,11 +195,11 @@ async def retention_loop(
     downsample_after_hours: int | None,
     low_res_minutes: int,
     low_res_max_days: int | None,
-    interval_max_days: int | None,
+    interval_downsample_after_days: int | None,
+    interval_low_res_hours: int,
+    interval_low_res_max_days: int | None,
     prune_include_intervals: bool,
     max_db_mb: int | None,
-    prune_batch: int,
-    max_prune_iterations: int,
     health: HealthState,
     stop: asyncio.Event,
 ) -> None:
@@ -223,18 +225,37 @@ async def retention_loop(
                 if low_res_deleted:
                     log("retention.low_res_prune", deleted=low_res_deleted, older_than_days=low_res_max_days)
 
-            if interval_max_days and interval_max_days > 0:
-                interval_deleted = await delete_energy_intervals_older_than(pool, interval_max_days)
-                if interval_deleted:
-                    log("retention.interval_prune", deleted=interval_deleted, older_than_days=interval_max_days)
+            if interval_downsample_after_days and interval_downsample_after_days > 0:
+                interval_inserted = await downsample_energy_intervals(
+                    pool,
+                    interval_downsample_after_days,
+                    interval_low_res_hours * 3600,
+                )
+                interval_deleted = await delete_energy_intervals_older_than(pool, interval_downsample_after_days)
+                log(
+                    "retention.interval_downsample",
+                    inserted=interval_inserted,
+                    deleted=interval_deleted,
+                    older_than_days=interval_downsample_after_days,
+                    low_res_hours=interval_low_res_hours,
+                )
+
+            if interval_low_res_max_days and interval_low_res_max_days > 0:
+                interval_low_deleted = await delete_energy_intervals_1h_older_than(
+                    pool, interval_low_res_max_days
+                )
+                if interval_low_deleted:
+                    log(
+                        "retention.interval_low_prune",
+                        deleted=interval_low_deleted,
+                        older_than_days=interval_low_res_max_days,
+                    )
 
             if max_db_mb and max_db_mb > 0:
                 max_bytes = int(max_db_mb * 1024 * 1024)
                 deleted = await prune_power_storage_by_size(
                     pool,
                     max_bytes=max_bytes,
-                    batch_size=prune_batch,
-                    max_iterations=max_prune_iterations,
                     include_intervals=prune_include_intervals,
                 )
                 if deleted["raw"] or deleted["low"] or deleted["intervals"]:
@@ -244,6 +265,7 @@ async def retention_loop(
                         deleted_low=deleted["low"],
                         deleted_intervals=deleted["intervals"],
                         include_intervals=prune_include_intervals,
+                        cutoff=deleted["cutoff"],
                         max_db_mb=max_db_mb,
                     )
 
@@ -365,11 +387,11 @@ async def run() -> None:
                 settings.RETENTION_DOWNSAMPLE_AFTER_HOURS,
                 settings.RETENTION_LOW_RES_MINUTES,
                 settings.RETENTION_LOW_RES_MAX_DAYS,
-                settings.RETENTION_INTERVAL_MAX_DAYS,
+                settings.RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS,
+                settings.RETENTION_INTERVAL_LOW_RES_HOURS,
+                settings.RETENTION_INTERVAL_LOW_RES_MAX_DAYS,
                 settings.RETENTION_PRUNE_INCLUDE_INTERVALS,
                 settings.RETENTION_MAX_DB_MB,
-                settings.RETENTION_PRUNE_BATCH,
-                settings.RETENTION_MAX_PRUNE_ITERATIONS,
                 health,
                 stop,
             )

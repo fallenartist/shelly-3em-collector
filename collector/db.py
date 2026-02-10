@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from psycopg_pool import AsyncConnectionPool
@@ -126,6 +126,41 @@ async def delete_power_readings_1m_older_than(pool: AsyncConnectionPool, older_t
             return cur.rowcount or 0
 
 
+async def downsample_energy_intervals(
+    pool: AsyncConnectionPool,
+    older_than_days: int,
+    bucket_seconds: int,
+) -> int:
+    bucket_seconds = max(3600, int(bucket_seconds))
+    query = """
+        INSERT INTO energy_intervals_1h (
+            ts_hour,
+            device_id,
+            channel,
+            energy_wh,
+            avg_power_w,
+            samples
+        )
+        SELECT
+            (timestamptz 'epoch'
+             + floor(extract(epoch from start_ts) / %(bucket_seconds)s)
+             * %(bucket_seconds)s * interval '1 second') AS ts_hour,
+            COALESCE(device_id, 'unknown') AS device_id,
+            channel,
+            sum(energy_wh) AS energy_wh,
+            sum(energy_wh) * 3600.0 / %(bucket_seconds)s AS avg_power_w,
+            count(*) AS samples
+        FROM energy_intervals
+        WHERE start_ts < (now() AT TIME ZONE 'utc') - (%(days)s || ' days')::interval
+        GROUP BY 1, 2, 3
+        ON CONFLICT (device_id, channel, ts_hour) DO NOTHING
+    """
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, {"days": older_than_days, "bucket_seconds": bucket_seconds})
+            return cur.rowcount or 0
+
+
 async def get_database_size_bytes(pool: AsyncConnectionPool) -> int | None:
     query = "SELECT pg_database_size(current_database())"
     async with pool.connection() as conn:
@@ -140,114 +175,149 @@ async def get_database_size_bytes(pool: AsyncConnectionPool) -> int | None:
 async def prune_power_storage_by_size(
     pool: AsyncConnectionPool,
     max_bytes: int,
-    batch_size: int,
-    max_iterations: int,
     include_intervals: bool = False,
-) -> dict[str, int]:
+) -> dict[str, int | None]:
+    size = await get_database_size_bytes(pool)
+    if size is None or size <= max_bytes:
+        return {"raw": 0, "low": 0, "intervals": 0, "cutoff": None}
+
     deleted_raw = 0
     deleted_low = 0
     deleted_intervals = 0
-    for _ in range(max_iterations):
+    cutoff: datetime | None = None
+
+    for _ in range(5):
         size = await get_database_size_bytes(pool)
         if size is None or size <= max_bytes:
             break
 
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
-                if include_intervals:
-                    await cur.execute(
-                        """
-                        SELECT source, ts
-                        FROM (
-                            SELECT 'power_readings' AS source, MIN(ts) AS ts FROM power_readings
-                            UNION ALL
-                            SELECT 'power_readings_1m' AS source, MIN(ts_minute) AS ts FROM power_readings_1m
-                            UNION ALL
-                            SELECT 'energy_intervals' AS source, MIN(start_ts) AS ts FROM energy_intervals
-                        ) sources
-                        WHERE ts IS NOT NULL
-                        ORDER BY ts ASC
-                        LIMIT 1
-                        """
-                    )
-                else:
-                    await cur.execute(
-                        """
-                        SELECT source, ts
-                        FROM (
-                            SELECT 'power_readings' AS source, MIN(ts) AS ts FROM power_readings
-                            UNION ALL
-                            SELECT 'power_readings_1m' AS source, MIN(ts_minute) AS ts FROM power_readings_1m
-                        ) sources
-                        WHERE ts IS NOT NULL
-                        ORDER BY ts ASC
-                        LIMIT 1
-                        """
-                    )
+                await cur.execute(
+                    """
+                    SELECT
+                        (SELECT MIN(ts) FROM power_readings) AS pr_min,
+                        (SELECT MAX(ts) FROM power_readings) AS pr_max,
+                        (SELECT MIN(ts_minute) FROM power_readings_1m) AS pr1_min,
+                        (SELECT MAX(ts_minute) FROM power_readings_1m) AS pr1_max,
+                        (SELECT MIN(start_ts) FROM energy_intervals) AS ei_min,
+                        (SELECT MAX(start_ts) FROM energy_intervals) AS ei_max,
+                        (SELECT MIN(ts_hour) FROM energy_intervals_1h) AS ei1_min,
+                        (SELECT MAX(ts_hour) FROM energy_intervals_1h) AS ei1_max
+                    """
+                )
                 row = await cur.fetchone()
 
-            if row is None:
+                await cur.execute(
+                    """
+                    SELECT
+                        pg_total_relation_size('power_readings') AS pr_size,
+                        pg_total_relation_size('power_readings_1m') AS pr1_size,
+                        pg_total_relation_size('energy_intervals') AS ei_size,
+                        pg_total_relation_size('energy_intervals_1h') AS ei1_size
+                    """
+                )
+                size_row = await cur.fetchone()
+
+            if row is None or size_row is None:
                 break
 
-            source = row[0]
-            if source == "power_readings":
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        """
-                        DELETE FROM power_readings
-                        WHERE id IN (
-                            SELECT id
-                            FROM power_readings
-                            ORDER BY ts ASC
-                            LIMIT %(limit)s
-                        )
-                        """,
-                        {"limit": batch_size},
-                    )
-                    deleted = cur.rowcount or 0
-                    deleted_raw += deleted
-            elif source == "energy_intervals":
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        """
-                        DELETE FROM energy_intervals
-                        WHERE id IN (
-                            SELECT id
-                            FROM energy_intervals
-                            ORDER BY start_ts ASC
-                            LIMIT %(limit)s
-                        )
-                        """,
-                        {"limit": batch_size},
-                    )
-                    deleted = cur.rowcount or 0
-                    deleted_intervals += deleted
-            else:
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        """
-                        DELETE FROM power_readings_1m
-                        WHERE (device_id, ts_minute) IN (
-                            SELECT device_id, ts_minute
-                            FROM power_readings_1m
-                            ORDER BY ts_minute ASC
-                            LIMIT %(limit)s
-                        )
-                        """,
-                        {"limit": batch_size},
-                    )
-                    deleted = cur.rowcount or 0
-                    deleted_low += deleted
+            pr_min, pr_max, pr1_min, pr1_max, ei_min, ei_max, ei1_min, ei1_max = row
+            pr_size, pr1_size, ei_size, ei1_size = size_row
 
-        if deleted == 0:
+            candidates_min = [ts for ts in (pr_min, pr1_min) if ts is not None]
+            candidates_max = [ts for ts in (pr_max, pr1_max) if ts is not None]
+            if include_intervals:
+                if ei_min is not None:
+                    candidates_min.append(ei_min)
+                if ei_max is not None:
+                    candidates_max.append(ei_max)
+                if ei1_min is not None:
+                    candidates_min.append(ei1_min)
+                if ei1_max is not None:
+                    candidates_max.append(ei1_max)
+
+            if not candidates_min or not candidates_max:
+                break
+
+            global_min = min(candidates_min)
+            global_max = max(candidates_max)
+            span_seconds = (global_max - global_min).total_seconds()
+            if span_seconds <= 0:
+                break
+
+            included_size = int(pr_size) + int(pr1_size)
+            if include_intervals:
+                included_size += int(ei_size) + int(ei1_size)
+
+            if included_size <= 0:
+                break
+
+            bytes_over = size - max_bytes
+            bytes_per_second = included_size / span_seconds
+            if bytes_per_second <= 0:
+                break
+
+            seconds_to_remove = int((bytes_over / bytes_per_second) + 1)
+            cutoff = global_min + timedelta(seconds=seconds_to_remove)
+            if cutoff > global_max:
+                cutoff = global_max
+
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "DELETE FROM power_readings WHERE ts < %(cutoff)s",
+                    {"cutoff": cutoff},
+                )
+                deleted_raw += cur.rowcount or 0
+
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "DELETE FROM power_readings_1m WHERE ts_minute < %(cutoff)s",
+                    {"cutoff": cutoff},
+                )
+                deleted_low += cur.rowcount or 0
+
+            if include_intervals:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "DELETE FROM energy_intervals WHERE start_ts < %(cutoff)s",
+                        {"cutoff": cutoff},
+                    )
+                    deleted_intervals += cur.rowcount or 0
+
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "DELETE FROM energy_intervals_1h WHERE ts_hour < %(cutoff)s",
+                        {"cutoff": cutoff},
+                    )
+                    deleted_intervals += cur.rowcount or 0
+
+        if cutoff == global_max:
             break
-    return {"raw": deleted_raw, "low": deleted_low, "intervals": deleted_intervals}
+
+    return {
+        "raw": deleted_raw,
+        "low": deleted_low,
+        "intervals": deleted_intervals,
+        "cutoff": cutoff,
+    }
 
 
 async def delete_energy_intervals_older_than(pool: AsyncConnectionPool, older_than_days: int) -> int:
     query = """
         DELETE FROM energy_intervals
         WHERE start_ts < (now() AT TIME ZONE 'utc') - (%(days)s || ' days')::interval
+    """
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, {"days": older_than_days})
+            return cur.rowcount or 0
+
+
+async def delete_energy_intervals_1h_older_than(pool: AsyncConnectionPool, older_than_days: int) -> int:
+    query = """
+        DELETE FROM energy_intervals_1h
+        WHERE ts_hour < (now() AT TIME ZONE 'utc') - (%(days)s || ' days')::interval
     """
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
