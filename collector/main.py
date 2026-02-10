@@ -17,7 +17,7 @@ from .db import (
     downsample_power_readings,
     insert_alert_event,
     insert_power_reading,
-    prune_power_readings_by_size,
+    prune_power_storage_by_size,
     upsert_device_settings,
     upsert_energy_interval,
 )
@@ -222,14 +222,19 @@ async def retention_loop(
 
             if max_db_mb and max_db_mb > 0:
                 max_bytes = int(max_db_mb * 1024 * 1024)
-                deleted = await prune_power_readings_by_size(
+                deleted = await prune_power_storage_by_size(
                     pool,
                     max_bytes=max_bytes,
                     batch_size=prune_batch,
                     max_iterations=max_prune_iterations,
                 )
-                if deleted:
-                    log("retention.prune", deleted=deleted, max_db_mb=max_db_mb)
+                if deleted["raw"] or deleted["low"]:
+                    log(
+                        "retention.prune",
+                        deleted_raw=deleted["raw"],
+                        deleted_low=deleted["low"],
+                        max_db_mb=max_db_mb,
+                    )
 
             health.last_retention_run = _utcnow()
         except Exception as exc:  # noqa: BLE001

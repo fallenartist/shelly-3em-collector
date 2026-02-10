@@ -137,34 +137,76 @@ async def get_database_size_bytes(pool: AsyncConnectionPool) -> int | None:
             return int(row[0])
 
 
-async def prune_power_readings_by_size(
+async def prune_power_storage_by_size(
     pool: AsyncConnectionPool,
     max_bytes: int,
     batch_size: int,
     max_iterations: int,
-) -> int:
-    total_deleted = 0
+) -> dict[str, int]:
+    deleted_raw = 0
+    deleted_low = 0
     for _ in range(max_iterations):
         size = await get_database_size_bytes(pool)
         if size is None or size <= max_bytes:
             break
-        query = """
-            DELETE FROM power_readings
-            WHERE id IN (
-                SELECT id
-                FROM power_readings
-                ORDER BY ts ASC
-                LIMIT %(limit)s
-            )
-        """
+
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(query, {"limit": batch_size})
-                deleted = cur.rowcount or 0
-                total_deleted += deleted
+                await cur.execute(
+                    """
+                    SELECT source, ts
+                    FROM (
+                        SELECT 'power_readings' AS source, MIN(ts) AS ts FROM power_readings
+                        UNION ALL
+                        SELECT 'power_readings_1m' AS source, MIN(ts_minute) AS ts FROM power_readings_1m
+                    ) sources
+                    WHERE ts IS NOT NULL
+                    ORDER BY ts ASC
+                    LIMIT 1
+                    """
+                )
+                row = await cur.fetchone()
+
+            if row is None:
+                break
+
+            source = row[0]
+            if source == "power_readings":
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        DELETE FROM power_readings
+                        WHERE id IN (
+                            SELECT id
+                            FROM power_readings
+                            ORDER BY ts ASC
+                            LIMIT %(limit)s
+                        )
+                        """,
+                        {"limit": batch_size},
+                    )
+                    deleted = cur.rowcount or 0
+                    deleted_raw += deleted
+            else:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        DELETE FROM power_readings_1m
+                        WHERE (device_id, ts_minute) IN (
+                            SELECT device_id, ts_minute
+                            FROM power_readings_1m
+                            ORDER BY ts_minute ASC
+                            LIMIT %(limit)s
+                        )
+                        """,
+                        {"limit": batch_size},
+                    )
+                    deleted = cur.rowcount or 0
+                    deleted_low += deleted
+
         if deleted == 0:
             break
-    return total_deleted
+    return {"raw": deleted_raw, "low": deleted_low}
 
 
 async def insert_power_reading(

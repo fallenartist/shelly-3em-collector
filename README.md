@@ -63,7 +63,7 @@ python3 -m collector
 - `RETENTION_DOWNSAMPLE_AFTER_HOURS`: keep raw data for N hours.
 - `RETENTION_LOW_RES_MINUTES`: low‑res bucket size (minutes) for `power_readings_1m`.
 - `RETENTION_LOW_RES_MAX_DAYS`: optional retention window for low‑res rows.
-- `RETENTION_MAX_DB_MB`: optional DB size cap for pruning.
+- `RETENTION_MAX_DB_MB`: optional DB size cap; prunes oldest rows across raw + low‑res.
 - `RETENTION_PRUNE_BATCH`: rows per prune batch.
 - `RETENTION_MAX_PRUNE_ITERATIONS`: max batches per run.
 
@@ -184,7 +184,7 @@ Three‑step policy:
 1. Downsample raw `power_readings` older than `RETENTION_DOWNSAMPLE_AFTER_HOURS` into `power_readings_1m`
    using `RETENTION_LOW_RES_MINUTES` as the bucket size.
 2. Optional low‑res retention: if `RETENTION_LOW_RES_MAX_DAYS` is set, delete old rows from `power_readings_1m`.
-3. Optional size cap: if `RETENTION_MAX_DB_MB` is set, delete oldest raw rows in batches.
+3. Optional size cap: if `RETENTION_MAX_DB_MB` is set, delete oldest rows across raw + low‑res.
 
 Defaults:
 - Raw retention: 7 days (`RETENTION_DOWNSAMPLE_AFTER_HOURS=168`)
