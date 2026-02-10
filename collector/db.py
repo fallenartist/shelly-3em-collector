@@ -142,9 +142,11 @@ async def prune_power_storage_by_size(
     max_bytes: int,
     batch_size: int,
     max_iterations: int,
+    include_intervals: bool = False,
 ) -> dict[str, int]:
     deleted_raw = 0
     deleted_low = 0
+    deleted_intervals = 0
     for _ in range(max_iterations):
         size = await get_database_size_bytes(pool)
         if size is None or size <= max_bytes:
@@ -152,19 +154,36 @@ async def prune_power_storage_by_size(
 
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(
-                    """
-                    SELECT source, ts
-                    FROM (
-                        SELECT 'power_readings' AS source, MIN(ts) AS ts FROM power_readings
-                        UNION ALL
-                        SELECT 'power_readings_1m' AS source, MIN(ts_minute) AS ts FROM power_readings_1m
-                    ) sources
-                    WHERE ts IS NOT NULL
-                    ORDER BY ts ASC
-                    LIMIT 1
-                    """
-                )
+                if include_intervals:
+                    await cur.execute(
+                        """
+                        SELECT source, ts
+                        FROM (
+                            SELECT 'power_readings' AS source, MIN(ts) AS ts FROM power_readings
+                            UNION ALL
+                            SELECT 'power_readings_1m' AS source, MIN(ts_minute) AS ts FROM power_readings_1m
+                            UNION ALL
+                            SELECT 'energy_intervals' AS source, MIN(start_ts) AS ts FROM energy_intervals
+                        ) sources
+                        WHERE ts IS NOT NULL
+                        ORDER BY ts ASC
+                        LIMIT 1
+                        """
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        SELECT source, ts
+                        FROM (
+                            SELECT 'power_readings' AS source, MIN(ts) AS ts FROM power_readings
+                            UNION ALL
+                            SELECT 'power_readings_1m' AS source, MIN(ts_minute) AS ts FROM power_readings_1m
+                        ) sources
+                        WHERE ts IS NOT NULL
+                        ORDER BY ts ASC
+                        LIMIT 1
+                        """
+                    )
                 row = await cur.fetchone()
 
             if row is None:
@@ -187,6 +206,22 @@ async def prune_power_storage_by_size(
                     )
                     deleted = cur.rowcount or 0
                     deleted_raw += deleted
+            elif source == "energy_intervals":
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        DELETE FROM energy_intervals
+                        WHERE id IN (
+                            SELECT id
+                            FROM energy_intervals
+                            ORDER BY start_ts ASC
+                            LIMIT %(limit)s
+                        )
+                        """,
+                        {"limit": batch_size},
+                    )
+                    deleted = cur.rowcount or 0
+                    deleted_intervals += deleted
             else:
                 async with conn.cursor() as cur:
                     await cur.execute(
@@ -206,7 +241,18 @@ async def prune_power_storage_by_size(
 
         if deleted == 0:
             break
-    return {"raw": deleted_raw, "low": deleted_low}
+    return {"raw": deleted_raw, "low": deleted_low, "intervals": deleted_intervals}
+
+
+async def delete_energy_intervals_older_than(pool: AsyncConnectionPool, older_than_days: int) -> int:
+    query = """
+        DELETE FROM energy_intervals
+        WHERE start_ts < (now() AT TIME ZONE 'utc') - (%(days)s || ' days')::interval
+    """
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, {"days": older_than_days})
+            return cur.rowcount or 0
 
 
 async def insert_power_reading(

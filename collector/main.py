@@ -14,6 +14,7 @@ from .db import (
     create_pool,
     delete_power_readings_older_than,
     delete_power_readings_1m_older_than,
+    delete_energy_intervals_older_than,
     downsample_power_readings,
     insert_alert_event,
     insert_power_reading,
@@ -192,6 +193,8 @@ async def retention_loop(
     downsample_after_hours: int | None,
     low_res_minutes: int,
     low_res_max_days: int | None,
+    interval_max_days: int | None,
+    prune_include_intervals: bool,
     max_db_mb: int | None,
     prune_batch: int,
     max_prune_iterations: int,
@@ -220,6 +223,11 @@ async def retention_loop(
                 if low_res_deleted:
                     log("retention.low_res_prune", deleted=low_res_deleted, older_than_days=low_res_max_days)
 
+            if interval_max_days and interval_max_days > 0:
+                interval_deleted = await delete_energy_intervals_older_than(pool, interval_max_days)
+                if interval_deleted:
+                    log("retention.interval_prune", deleted=interval_deleted, older_than_days=interval_max_days)
+
             if max_db_mb and max_db_mb > 0:
                 max_bytes = int(max_db_mb * 1024 * 1024)
                 deleted = await prune_power_storage_by_size(
@@ -227,12 +235,15 @@ async def retention_loop(
                     max_bytes=max_bytes,
                     batch_size=prune_batch,
                     max_iterations=max_prune_iterations,
+                    include_intervals=prune_include_intervals,
                 )
-                if deleted["raw"] or deleted["low"]:
+                if deleted["raw"] or deleted["low"] or deleted["intervals"]:
                     log(
                         "retention.prune",
                         deleted_raw=deleted["raw"],
                         deleted_low=deleted["low"],
+                        deleted_intervals=deleted["intervals"],
+                        include_intervals=prune_include_intervals,
                         max_db_mb=max_db_mb,
                     )
 
@@ -354,6 +365,8 @@ async def run() -> None:
                 settings.RETENTION_DOWNSAMPLE_AFTER_HOURS,
                 settings.RETENTION_LOW_RES_MINUTES,
                 settings.RETENTION_LOW_RES_MAX_DAYS,
+                settings.RETENTION_INTERVAL_MAX_DAYS,
+                settings.RETENTION_PRUNE_INCLUDE_INTERVALS,
                 settings.RETENTION_MAX_DB_MB,
                 settings.RETENTION_PRUNE_BATCH,
                 settings.RETENTION_MAX_PRUNE_ITERATIONS,
