@@ -169,12 +169,16 @@ async def interval_poll_loop(
             inserted = 0
             chunks = 0
             chunk_start = start_ts
+            last_interval_ts: datetime | None = None
             while chunk_start <= block_end and chunks < max_chunks:
                 chunk_end = min(block_end, chunk_start + timedelta(seconds=period * (max_records - 1)))
                 data_payload = await rpc.get_emdata_data(
                     {"id": emdata_id, "ts": int(chunk_start.timestamp()), "end_ts": int(chunk_end.timestamp())}
                 )
                 intervals = list(parse_emdata_data(data_payload, device_ctx.device_id))
+                if not intervals:
+                    log("intervals.empty_chunk", start_ts=chunk_start, end_ts=chunk_end)
+                    break
                 for interval in intervals:
                     await upsert_energy_interval(
                         pool,
@@ -187,9 +191,11 @@ async def interval_poll_loop(
                         interval.meta,
                     )
                     inserted += 1
-                last_record_ts = chunk_end
-                chunk_start = chunk_end + timedelta(seconds=period)
+                last_interval_ts = max(i.start_ts for i in intervals)
+                chunk_start = last_interval_ts + timedelta(seconds=period)
                 chunks += 1
+            if last_interval_ts is not None:
+                last_record_ts = last_interval_ts
             health.last_interval_poll = _utcnow()
             log(
                 "intervals.ingested",
