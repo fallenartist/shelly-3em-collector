@@ -84,8 +84,9 @@ set in `.env` overrides the default. `.env.example` may suggest more production�
 
 **Retention & Storage**
 - `RETENTION_RUN_SECONDS` (default `3600`): retention loop cadence.
-- `RETENTION_DOWNSAMPLE_AFTER_HOURS` (default `24`): keep raw data for N hours before downsampling.
-  Set to `0`/empty to disable downsampling.
+- `RETENTION_DOWNSAMPLE_AFTER_HOURS` (default `24`): keep raw data for N hours before pruning.
+  `power_readings_1m` is refreshed continuously for recent buckets; this setting controls when
+  older buckets are backfilled and when raw rows are deleted. Set to `0`/empty to disable pruning.
 - `RETENTION_LOW_RES_MINUTES` (default `1`): bucket size for low‑res rows. Higher = smaller DB,
   less detail.
 - `RETENTION_LOW_RES_MAX_DAYS` (default `null`): optional retention window for low‑res rows.
@@ -128,6 +129,17 @@ python3 scripts/prune_db.py --yes
 ```
 This is irreversible. If you changed settings to **higher resolution** than before, the script
 cannot recreate missing data.
+
+**Rebuild `power_readings_1m`**
+If you need to backfill or refresh low‑res rows from raw `power_readings`, run:
+```bash
+python3 scripts/rebuild_power_readings_1m.py --start "2026-02-01T00:00:00Z" --end "2026-02-12T00:00:00Z"
+```
+Use `RETENTION_LOW_RES_MINUTES` by default, or override with `--bucket-minutes`.
+If you're running via Docker, use:
+```bash
+docker compose run --rm collector python3 scripts/rebuild_power_readings_1m.py --start "2026-02-01T00:00:00Z" --end "2026-02-12T00:00:00Z"
+```
 
 **HomeKit Notifications (homebridge-http-webhooks)**
 

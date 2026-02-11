@@ -22,6 +22,7 @@ from .db import (
     upsert_device_settings,
     upsert_energy_interval,
     upsert_energy_intervals_1h_range,
+    upsert_power_readings_1m_range,
 )
 from .health import HealthState
 from .ingest import extract_power_reading
@@ -35,6 +36,13 @@ ALERT_TYPE_HIGH_POWER = "HIGH_POWER"
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _bucket_start(ts: datetime, bucket_seconds: int) -> datetime:
+    bucket_seconds = max(60, int(bucket_seconds))
+    epoch = int(ts.timestamp())
+    bucket_epoch = epoch - (epoch % bucket_seconds)
+    return datetime.fromtimestamp(bucket_epoch, tz=timezone.utc)
 
 
 @dataclass
@@ -67,6 +75,7 @@ async def live_poll_loop(
     pool,
     alert_engine: AlertEngine,
     trigger: HttpTrigger,
+    low_res_minutes: int,
     poll_seconds: int,
     health: HealthState,
     device_ctx: DeviceContext,
@@ -104,6 +113,11 @@ async def live_poll_loop(
                     {"device_id": reading.device_id},
                 )
                 asyncio.create_task(trigger.pulse())
+            if low_res_minutes and low_res_minutes > 0:
+                bucket_seconds = max(60, int(low_res_minutes) * 60)
+                bucket_start = _bucket_start(reading.ts, bucket_seconds)
+                bucket_end = bucket_start + timedelta(seconds=bucket_seconds)
+                await upsert_power_readings_1m_range(pool, bucket_start, bucket_end, bucket_seconds)
         except Exception as exc:  # noqa: BLE001
             health.last_error = str(exc)
             log("poll.error", loop="live", error=str(exc))
@@ -368,6 +382,7 @@ async def run() -> None:
                 pool,
                 alert_engine,
                 trigger,
+                settings.RETENTION_LOW_RES_MINUTES,
                 settings.POLL_LIVE_SECONDS,
                 health,
                 device_ctx,

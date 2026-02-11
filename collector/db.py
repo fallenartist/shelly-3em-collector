@@ -104,6 +104,68 @@ async def downsample_power_readings(
             return cur.rowcount or 0
 
 
+async def upsert_power_readings_1m_range(
+    pool: AsyncConnectionPool,
+    start_ts: datetime,
+    end_ts: datetime,
+    bucket_seconds: int,
+) -> int:
+    bucket_seconds = max(60, int(bucket_seconds))
+    query = """
+        INSERT INTO power_readings_1m (
+            ts_minute,
+            device_id,
+            avg_total_power_w,
+            avg_phase_a_power_w,
+            avg_phase_b_power_w,
+            avg_phase_c_power_w,
+            avg_phase_a_voltage_v,
+            avg_phase_b_voltage_v,
+            avg_phase_c_voltage_v,
+            avg_phase_a_current_a,
+            avg_phase_b_current_a,
+            avg_phase_c_current_a,
+            samples
+        )
+        SELECT
+            (timestamptz 'epoch'
+             + floor(extract(epoch from ts) / %(bucket_seconds)s)
+             * %(bucket_seconds)s * interval '1 second') AS ts_minute,
+            COALESCE(device_id, 'unknown') AS device_id,
+            avg(total_power_w),
+            avg(phase_a_power_w),
+            avg(phase_b_power_w),
+            avg(phase_c_power_w),
+            avg(phase_a_voltage_v),
+            avg(phase_b_voltage_v),
+            avg(phase_c_voltage_v),
+            avg(phase_a_current_a),
+            avg(phase_b_current_a),
+            avg(phase_c_current_a),
+            count(*)
+        FROM power_readings
+        WHERE ts >= %(start_ts)s AND ts < %(end_ts)s
+        GROUP BY 1, 2
+        ON CONFLICT (device_id, ts_minute) DO UPDATE SET
+            avg_total_power_w = EXCLUDED.avg_total_power_w,
+            avg_phase_a_power_w = EXCLUDED.avg_phase_a_power_w,
+            avg_phase_b_power_w = EXCLUDED.avg_phase_b_power_w,
+            avg_phase_c_power_w = EXCLUDED.avg_phase_c_power_w,
+            avg_phase_a_voltage_v = EXCLUDED.avg_phase_a_voltage_v,
+            avg_phase_b_voltage_v = EXCLUDED.avg_phase_b_voltage_v,
+            avg_phase_c_voltage_v = EXCLUDED.avg_phase_c_voltage_v,
+            avg_phase_a_current_a = EXCLUDED.avg_phase_a_current_a,
+            avg_phase_b_current_a = EXCLUDED.avg_phase_b_current_a,
+            avg_phase_c_current_a = EXCLUDED.avg_phase_c_current_a,
+            samples = EXCLUDED.samples
+    """
+    params = {"start_ts": start_ts, "end_ts": end_ts, "bucket_seconds": bucket_seconds}
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, params)
+            return cur.rowcount or 0
+
+
 async def delete_power_readings_older_than(pool: AsyncConnectionPool, older_than_hours: int) -> int:
     query = """
         DELETE FROM power_readings
