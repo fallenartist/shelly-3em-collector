@@ -187,7 +187,7 @@ async def upsert_energy_intervals_1h_range(
             sum(energy_wh) * 3600.0 / %(bucket_seconds)s AS avg_power_w,
             count(*) AS samples
         FROM energy_intervals
-        WHERE start_ts >= %(start_ts)s AND start_ts <= %(end_ts)s
+        WHERE start_ts >= %(start_ts)s AND start_ts < %(end_ts)s
         GROUP BY 1, 2, 3
         ON CONFLICT (device_id, channel, ts_hour) DO UPDATE SET
             energy_wh = EXCLUDED.energy_wh,

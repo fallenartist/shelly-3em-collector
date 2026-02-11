@@ -193,12 +193,9 @@ async def interval_poll_loop(
                     )
                     inserted += 1
                 last_interval_ts = max(i.start_ts for i in intervals)
-                await upsert_energy_intervals_1h_range(
-                    pool,
-                    chunk_start,
-                    last_interval_ts,
-                    bucket_seconds,
-                )
+                hour_start = chunk_start.replace(minute=0, second=0, microsecond=0)
+                hour_end = last_interval_ts.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                await upsert_energy_intervals_1h_range(pool, hour_start, hour_end, bucket_seconds)
                 chunk_start = last_interval_ts + timedelta(seconds=period)
                 chunks += 1
             if last_interval_ts is not None:
