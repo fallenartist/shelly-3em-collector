@@ -89,10 +89,9 @@ set in `.env` overrides the default. `.env.example` may suggest more production�
 - `RETENTION_LOW_RES_MINUTES` (default `1`): bucket size for low‑res rows. Higher = smaller DB,
   less detail.
 - `RETENTION_LOW_RES_MAX_DAYS` (default `null`): optional retention window for low‑res rows.
-- `RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS` (default `1`): keep 1‑minute interval rows for N days,
-  then downsample into hourly buckets.
 - `RETENTION_INTERVAL_LOW_RES_HOURS` (default `1`): bucket size for `energy_intervals_1h`.
-- `RETENTION_INTERVAL_LOW_RES_MAX_DAYS` (default `null`): optional retention window for hourly rows.
+- `RETENTION_INTERVAL_RAW_MAX_DAYS` (default `null`): optional retention window for raw interval rows.
+  Hourly rows are kept and updated alongside raw ingestion.
 - `RETENTION_MAX_DB_MB` (default `null`): optional size cap. When exceeded, oldest rows are deleted
   across raw + low‑res. If `RETENTION_PRUNE_INCLUDE_INTERVALS=true`, interval rows can be pruned too.
 - `RETENTION_PRUNE_INCLUDE_INTERVALS` (default `false`): include `energy_intervals` in size‑cap pruning.
@@ -112,7 +111,7 @@ Balanced default (good signal, reasonable DB growth):
 - `RETENTION_DOWNSAMPLE_AFTER_HOURS=720` (keep ~30 days of high‑res)
 - `RETENTION_LOW_RES_MINUTES=5` (good for behavior patterns)
 - `RETENTION_LOW_RES_MAX_DAYS=365` (1 year of low‑res shape)
-- `RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS=1` (keep 1‑minute intervals for 1 day)
+- `RETENTION_INTERVAL_RAW_MAX_DAYS=7` (keep raw intervals for 7 days)
 - `RETENTION_INTERVAL_LOW_RES_HOURS=1` (hourly kWh long‑term)
 
 If you want more detail in behavior patterns:
@@ -163,8 +162,9 @@ Why keep both `energy_intervals` and downsampled `power_readings_1m`?
   daily/monthly totals, and long‑term consumption accuracy.
 - `power_readings_1m` are **averaged power snapshots**. Best for **behavior patterns** (load shape,
   peaks, weekday/weekend differences) that energy totals alone can’t show.
-For long‑term storage, `energy_intervals` are downsampled into `energy_intervals_1h` based on
-`RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS` and `RETENTION_INTERVAL_LOW_RES_HOURS`.
+For long‑term storage, `energy_intervals_1h` is updated alongside raw ingestion; bucket size is
+controlled by `RETENTION_INTERVAL_LOW_RES_HOURS`. Raw retention is controlled by
+`RETENTION_INTERVAL_RAW_MAX_DAYS`.
 
 **Schema Add‑Ons**
 Apply these after `migrations/001_init.sql` as needed:

@@ -15,14 +15,13 @@ from .db import (
     delete_power_readings_older_than,
     delete_power_readings_1m_older_than,
     delete_energy_intervals_older_than,
-    delete_energy_intervals_1h_older_than,
     downsample_power_readings,
-    downsample_energy_intervals,
     insert_alert_event,
     insert_power_reading,
     prune_power_storage_by_size,
     upsert_device_settings,
     upsert_energy_interval,
+    upsert_energy_intervals_1h_range,
 )
 from .health import HealthState
 from .ingest import extract_power_reading
@@ -119,6 +118,7 @@ async def interval_poll_loop(
     lookback_records: int,
     max_records_per_call: int,
     max_chunks_per_poll: int,
+    interval_bucket_hours: int,
     poll_seconds: int,
     health: HealthState,
     stop: asyncio.Event,
@@ -166,6 +166,7 @@ async def interval_poll_loop(
 
             max_records = max(1, int(max_records_per_call))
             max_chunks = max(1, int(max_chunks_per_poll))
+            bucket_seconds = max(1, int(interval_bucket_hours)) * 3600
             inserted = 0
             chunks = 0
             chunk_start = start_ts
@@ -192,6 +193,12 @@ async def interval_poll_loop(
                     )
                     inserted += 1
                 last_interval_ts = max(i.start_ts for i in intervals)
+                await upsert_energy_intervals_1h_range(
+                    pool,
+                    chunk_start,
+                    last_interval_ts,
+                    bucket_seconds,
+                )
                 chunk_start = last_interval_ts + timedelta(seconds=period)
                 chunks += 1
             if last_interval_ts is not None:
@@ -216,9 +223,7 @@ async def retention_loop(
     downsample_after_hours: int | None,
     low_res_minutes: int,
     low_res_max_days: int | None,
-    interval_downsample_after_days: int | None,
-    interval_low_res_hours: int,
-    interval_low_res_max_days: int | None,
+    interval_raw_max_days: int | None,
     prune_include_intervals: bool,
     max_db_mb: int | None,
     health: HealthState,
@@ -246,30 +251,13 @@ async def retention_loop(
                 if low_res_deleted:
                     log("retention.low_res_prune", deleted=low_res_deleted, older_than_days=low_res_max_days)
 
-            if interval_downsample_after_days and interval_downsample_after_days > 0:
-                interval_inserted = await downsample_energy_intervals(
-                    pool,
-                    interval_downsample_after_days,
-                    interval_low_res_hours * 3600,
-                )
-                interval_deleted = await delete_energy_intervals_older_than(pool, interval_downsample_after_days)
-                log(
-                    "retention.interval_downsample",
-                    inserted=interval_inserted,
-                    deleted=interval_deleted,
-                    older_than_days=interval_downsample_after_days,
-                    low_res_hours=interval_low_res_hours,
-                )
-
-            if interval_low_res_max_days and interval_low_res_max_days > 0:
-                interval_low_deleted = await delete_energy_intervals_1h_older_than(
-                    pool, interval_low_res_max_days
-                )
-                if interval_low_deleted:
+            if interval_raw_max_days and interval_raw_max_days > 0:
+                interval_deleted = await delete_energy_intervals_older_than(pool, interval_raw_max_days)
+                if interval_deleted:
                     log(
-                        "retention.interval_low_prune",
-                        deleted=interval_low_deleted,
-                        older_than_days=interval_low_res_max_days,
+                        "retention.interval_raw_prune",
+                        deleted=interval_deleted,
+                        older_than_days=interval_raw_max_days,
                     )
 
             if max_db_mb and max_db_mb > 0:
@@ -398,6 +386,7 @@ async def run() -> None:
                 settings.EMDATA_LOOKBACK_RECORDS,
                 settings.EMDATA_MAX_RECORDS,
                 settings.EMDATA_MAX_CHUNKS_PER_POLL,
+                settings.RETENTION_INTERVAL_LOW_RES_HOURS,
                 settings.POLL_INTERVAL_DATA_SECONDS,
                 health,
                 stop,
@@ -410,9 +399,7 @@ async def run() -> None:
                 settings.RETENTION_DOWNSAMPLE_AFTER_HOURS,
                 settings.RETENTION_LOW_RES_MINUTES,
                 settings.RETENTION_LOW_RES_MAX_DAYS,
-                settings.RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS,
-                settings.RETENTION_INTERVAL_LOW_RES_HOURS,
-                settings.RETENTION_INTERVAL_LOW_RES_MAX_DAYS,
+                settings.RETENTION_INTERVAL_RAW_MAX_DAYS,
                 settings.RETENTION_PRUNE_INCLUDE_INTERVALS,
                 settings.RETENTION_MAX_DB_MB,
                 health,

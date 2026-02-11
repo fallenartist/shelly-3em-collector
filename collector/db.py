@@ -161,6 +161,46 @@ async def downsample_energy_intervals(
             return cur.rowcount or 0
 
 
+async def upsert_energy_intervals_1h_range(
+    pool: AsyncConnectionPool,
+    start_ts: datetime,
+    end_ts: datetime,
+    bucket_seconds: int,
+) -> int:
+    bucket_seconds = max(3600, int(bucket_seconds))
+    query = """
+        INSERT INTO energy_intervals_1h (
+            ts_hour,
+            device_id,
+            channel,
+            energy_wh,
+            avg_power_w,
+            samples
+        )
+        SELECT
+            (timestamptz 'epoch'
+             + floor(extract(epoch from start_ts) / %(bucket_seconds)s)
+             * %(bucket_seconds)s * interval '1 second') AS ts_hour,
+            COALESCE(device_id, 'unknown') AS device_id,
+            channel,
+            sum(energy_wh) AS energy_wh,
+            sum(energy_wh) * 3600.0 / %(bucket_seconds)s AS avg_power_w,
+            count(*) AS samples
+        FROM energy_intervals
+        WHERE start_ts >= %(start_ts)s AND start_ts <= %(end_ts)s
+        GROUP BY 1, 2, 3
+        ON CONFLICT (device_id, channel, ts_hour) DO UPDATE SET
+            energy_wh = EXCLUDED.energy_wh,
+            avg_power_w = EXCLUDED.avg_power_w,
+            samples = EXCLUDED.samples
+    """
+    params = {"start_ts": start_ts, "end_ts": end_ts, "bucket_seconds": bucket_seconds}
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(query, params)
+            return cur.rowcount or 0
+
+
 async def get_database_size_bytes(pool: AsyncConnectionPool) -> int | None:
     query = "SELECT pg_database_size(current_database())"
     async with pool.connection() as conn:

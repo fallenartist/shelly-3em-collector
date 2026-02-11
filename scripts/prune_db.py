@@ -21,11 +21,9 @@ except ModuleNotFoundError as exc:
 from collector.db import (
     create_pool,
     delete_energy_intervals_older_than,
-    delete_energy_intervals_1h_older_than,
     delete_power_readings_1m_older_than,
     delete_power_readings_older_than,
     downsample_power_readings,
-    downsample_energy_intervals,
     get_database_size_bytes,
     prune_power_storage_by_size,
 )
@@ -51,9 +49,8 @@ async def run() -> None:
     print(f"- RETENTION_DOWNSAMPLE_AFTER_HOURS={settings.RETENTION_DOWNSAMPLE_AFTER_HOURS}")
     print(f"- RETENTION_LOW_RES_MINUTES={settings.RETENTION_LOW_RES_MINUTES}")
     print(f"- RETENTION_LOW_RES_MAX_DAYS={settings.RETENTION_LOW_RES_MAX_DAYS}")
-    print(f"- RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS={settings.RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS}")
     print(f"- RETENTION_INTERVAL_LOW_RES_HOURS={settings.RETENTION_INTERVAL_LOW_RES_HOURS}")
-    print(f"- RETENTION_INTERVAL_LOW_RES_MAX_DAYS={settings.RETENTION_INTERVAL_LOW_RES_MAX_DAYS}")
+    print(f"- RETENTION_INTERVAL_RAW_MAX_DAYS={settings.RETENTION_INTERVAL_RAW_MAX_DAYS}")
     print(f"- RETENTION_MAX_DB_MB={settings.RETENTION_MAX_DB_MB}")
     print(f"- RETENTION_PRUNE_INCLUDE_INTERVALS={settings.RETENTION_PRUNE_INCLUDE_INTERVALS}")
 
@@ -84,21 +81,11 @@ async def run() -> None:
         low_deleted = await delete_power_readings_1m_older_than(pool, settings.RETENTION_LOW_RES_MAX_DAYS)
         print(f"Low-res rows deleted: {low_deleted}")
 
-    if settings.RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS and settings.RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS > 0:
-        interval_inserted = await downsample_energy_intervals(
-            pool,
-            settings.RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS,
-            settings.RETENTION_INTERVAL_LOW_RES_HOURS * 3600,
+    if settings.RETENTION_INTERVAL_RAW_MAX_DAYS and settings.RETENTION_INTERVAL_RAW_MAX_DAYS > 0:
+        interval_deleted = await delete_energy_intervals_older_than(
+            pool, settings.RETENTION_INTERVAL_RAW_MAX_DAYS
         )
-        interval_deleted = await delete_energy_intervals_older_than(pool, settings.RETENTION_INTERVAL_DOWNSAMPLE_AFTER_DAYS)
-        print(f"Interval rows inserted (low-res): {interval_inserted}")
-        print(f"Interval rows deleted (raw): {interval_deleted}")
-
-    if settings.RETENTION_INTERVAL_LOW_RES_MAX_DAYS and settings.RETENTION_INTERVAL_LOW_RES_MAX_DAYS > 0:
-        interval_low_deleted = await delete_energy_intervals_1h_older_than(
-            pool, settings.RETENTION_INTERVAL_LOW_RES_MAX_DAYS
-        )
-        print(f"Interval low-res rows deleted: {interval_low_deleted}")
+        print(f"Interval raw rows deleted: {interval_deleted}")
 
     if settings.RETENTION_MAX_DB_MB and settings.RETENTION_MAX_DB_MB > 0:
         max_bytes = int(settings.RETENTION_MAX_DB_MB * 1024 * 1024)
